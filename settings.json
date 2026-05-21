@@ -1,0 +1,12 @@
+{
+  "cppNavigator.activeConfigs": [],       // 用户自己填，或留空=全量索引
+  "cppNavigator.extraRoots": [],          // 用户自己填额外仓库路径
+  "cppNavigator.excludePatterns": [
+    "**/build/**",
+    "**/out/**",
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/CMakeFiles/**",
+    "**/compile_commands.json"
+  ]
+}

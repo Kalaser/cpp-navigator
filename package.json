@@ -1,0 +1,55 @@
+{
+  "name": "cpp-navigator",
+  "displayName": "C/C++ Navigator",
+  "version": "0.0.1",
+  "publisher": "Kalaser",
+  "description": "轻量级、高性能的 C/C++ 符号索引与跳转工具",
+  "icon": "images/icon.png",
+  "categories": ["Programming Languages", "Navigation"],
+  "keywords": ["c", "c++", "cpp", "navigation", "symbols"],
+  "repository": {"type": "git", "url": "https://github.com/Kalaser/cpp-navigator"},
+  "engines": { "vscode": "^1.80.0" },
+  "activationEvents": ["onLanguage:c", "onLanguage:cpp"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cppNavigator.rebuildIndex",
+        "title": "C/C++ Navigator: Rebuild Index"
+      }
+    ],
+    "configuration": {
+      "title": "C/C++ Navigator",
+      "properties": {
+        "cppNavigator.activeConfigs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "激活的条件编译宏]"
+        },
+        "cppNavigator.extraRoots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "额外索引的仓库根目录（绝对路径或相对工作区的路径）"
+        },
+        "cppNavigator.excludePatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/build/**", "**/out/**", "**/.git/**"],
+          "description": "排除的目录 glob"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "npx rimraf out *.vsix",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}
