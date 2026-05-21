@@ -26,6 +26,23 @@ C/C++ Navigator 是一个专为大型 C/C++ 项目（如 Linux 内核、RTOS、�
 | `cppNavigator.extraRoots` | `Array<string>` | `[]` | **额外索引的源码根目录**。如果你的项目引用了工作区之外的 SDK 或第三方库，可以将它们的绝对路径或相对路径添加到此处。 |
 | `cppNavigator.excludePatterns` | `Array<string>` | `["**/build/**", "**/out/**", "**/.git/**"]` | **排除扫描的目录规则 (Glob)**。通过排除编译产物和版本控制目录，能大幅加快扫描速度并避免匹配到重复的冗余符号。 |
 
+你也可以直接在工作区根目录的 `.vscode/settings.json` 中参考以下内容进行自定义配置：
+
+```json
+{
+  "cppNavigator.activeConfigs": [],       // 用户自己填，或留空=全量索引
+  "cppNavigator.extraRoots": [],          // 用户自己填额外仓库路径
+  "cppNavigator.excludePatterns": [
+    "**/build/**",
+    "**/out/**",
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/CMakeFiles/**",
+    "**/compile_commands.json"
+  ]
+}
+```
+
 ## 📖 使用指南
 
 1. **自动索引**：安装插件并打开任意 C/C++ 工程后，插件将在后台自动建立索引（VS Code 右下角状态栏会显示“C/C++ Nav: 正在索引...” 及完成后的符号数量）。

@@ -13,7 +13,12 @@ function getConfig() {
         activeConfigs: new Set<string>(cfg.get<string[]>('activeConfigs', [])),
         extraRoots:    cfg.get<string[]>('extraRoots', []),
         excludePatterns: cfg.get<string[]>('excludePatterns', [
-            '**/build/**', '**/out/**', '**/.git/**'
+            '**/build/**',
+            '**/out/**',
+            '**/.git/**',
+            '**/node_modules/**',
+            '**/CMakeFiles/**',
+            '**/compile_commands.json'
         ]),
     };
 }
@@ -22,7 +27,14 @@ async function buildIndex(showProgress = true) {
     const cfg = vscode.workspace.getConfiguration('cppNavigator');
     const userConfigs  = cfg.get<string[]>('activeConfigs', []);
     const extraRoots   = cfg.get<string[]>('extraRoots', []);
-    const excludePatterns = cfg.get<string[]>('excludePatterns', ['**/build/**', '**/.git/**']);
+    const excludePatterns = cfg.get<string[]>('excludePatterns', [
+        '**/build/**',
+        '**/out/**',
+        '**/.git/**',
+        '**/node_modules/**',
+        '**/CMakeFiles/**',
+        '**/compile_commands.json'
+    ]);
 
     const wsFolders = vscode.workspace.workspaceFolders ?? [];
     const roots = [

@@ -25,7 +25,7 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "激活的条件编译宏]"
+          "description": "激活的条件编译宏"
         },
         "cppNavigator.extraRoots": {
           "type": "array",
@@ -36,7 +36,14 @@
         "cppNavigator.excludePatterns": {
           "type": "array",
           "items": { "type": "string" },
-          "default": ["**/build/**", "**/out/**", "**/.git/**"],
+          "default": [
+            "**/build/**",
+            "**/out/**",
+            "**/.git/**",
+            "**/node_modules/**",
+            "**/CMakeFiles/**",
+            "**/compile_commands.json"
+          ],
           "description": "排除的目录 glob"
         }
       }
