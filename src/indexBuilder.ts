@@ -18,8 +18,9 @@ const RE = {
     // typedef
     typedefSimple: new RegExp('^typedef\\s+[\\w\\s\\*&:<>,~]+\\b(' + NAME_PATTERN + ')\\s*;'),
 
-    // struct/union/enum 定义
-    structDef: new RegExp('^(?:typedef\\s+)?(?:struct|union|enum)\\s+(' + NAME_PATTERN + ')'),
+    // struct/union/enum 定义（支持 typedef 和匿名形式）
+    structDefAnon: /^(?:typedef\s+)?(?:struct|union|enum)\s*\{/,
+    structDefNamed: new RegExp('(?:struct|union|enum)\\s+(' + NAME_PATTERN + ')(?:\\s*[:{;]|\\s*$)'),
 
     // 宏定义
     macroDefine: new RegExp('^#define\\s+(' + NAME_PATTERN + ')'),
@@ -144,6 +145,9 @@ export async function scanFile(
             }
         } else if ((scopeMatch = raw.match(RE.classStructOpen))) {
             scopeStack.push({ name: scopeMatch[1], startDepth: braceDepth });
+        } else if ((scopeMatch = raw.match(/^(?:class|struct|union)\s+(\w+)\b[^;{]*\{/))) {
+            // 处理 class/struct/union 的作用域
+            scopeStack.push({ name: scopeMatch[1], startDepth: braceDepth });
         } else if (pendingScope && raw.includes('{')) {
             scopeStack.push({ name: pendingScope, startDepth: braceDepth });
             pendingScope = null;
@@ -179,18 +183,43 @@ export async function scanFile(
             });
         };
 
+        // 宏定义
         if ((m = raw.match(RE.macroDefine))) {
             addSym(m[1], 'definition');
-        } else if ((m = raw.match(RE.structDef))) {
+        } 
+        // struct/union/enum 定义
+        else if ((m = raw.match(RE.structDefNamed))) {
             addSym(m[1], 'definition');
-        } else if ((m = raw.match(RE.typedefSimple))) {
+        } 
+        // typedef 类型别名（处理 typedef struct/union/enum {...} Name; 的 Name 部分）
+        else if (raw.startsWith('typedef') && raw.endsWith(';')) {
+            const typedefMatch = raw.match(/^typedef\s+(?:struct|union|enum)?\s*[\w\s{};,\*&<>]+\s+(\w+)\s*;/);
+            if (typedefMatch) {
+                addSym(typedefMatch[1], 'definition');
+            } else {
+                const simpleMatch = raw.match(RE.typedefSimple);
+                if (simpleMatch) addSym(simpleMatch[1], 'definition');
+            }
+        }
+        // 结构体/枚举结束后带名称的情况：} Name;
+        else if (raw.match(/^}\s*(\w+)\s*;?\s*$/)) {
+            const match = raw.match(/^}\s*(\w+)\s*;?\s*$/);
+            if (match) {
+                const name = match[1];
+                if (!KEYWORDS.has(name) && name.length >= 2) {
+                    addSym(name, 'definition');
+                }
+            }
+        }
+        // 函数定义
+        else if ((m = raw.match(RE.funcDef))) {
             addSym(m[1], 'definition');
-        } else if ((m = raw.match(RE.funcDef))) {
-            addSym(m[1], 'definition');
-        } else if ((m = raw.match(RE.funcDecl))) {
+        } 
+        // 函数声明
+        else if ((m = raw.match(RE.funcDecl))) {
             addSym(m[1], 'declaration');
         }
-        // varDef 较宽泛，只在 .c 文件里匹配，避免头文件噪声
+        // 变量定义（只在 .c 文件里匹配，避免头文件噪声）
         else if (filePath.endsWith('.c') && (m = raw.match(RE.varDef))) {
             addSym(m[1], 'definition');
         }
