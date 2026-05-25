@@ -1,7 +1,7 @@
 {
   "name": "cpp-navigator",
   "displayName": "C/C++ Navigator",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "publisher": "Kalaser",
   "description": "轻量级、高性能的 C/C++ 符号索引与跳转工具",
   "icon": "images/icon.png",
