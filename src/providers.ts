@@ -8,12 +8,12 @@ function toLocation(e: SymbolEntry): vscode.Location {
     return new vscode.Location(uri, pos);
 }
 
-// 从光标位置提取单词
+// 从光标位置提取单词，支持命名空间限定符和简单 C++ 标识符
 function getWordAt(
     document: vscode.TextDocument,
     position: vscode.Position
 ): string | undefined {
-    const range = document.getWordRangeAtPosition(position, /[\w_]+/);
+    const range = document.getWordRangeAtPosition(position, /[\w:]+/);
     return range ? document.getText(range) : undefined;
 }
 
@@ -62,7 +62,7 @@ export class WorkspaceSymbolProvider implements vscode.WorkspaceSymbolProvider {
         const entries = this.index.search(query).slice(0, 100);
         return entries.map(e => {
             const kind = e.kind === 'definition' ? vscode.SymbolKind.Function : vscode.SymbolKind.Variable;
-            return new vscode.SymbolInformation(e.name, kind, '', toLocation(e));
+            return new vscode.SymbolInformation(e.qualifiedName, kind, '', toLocation(e));
         });
     }
 }
@@ -75,7 +75,7 @@ export class DocumentSymbolProvider implements vscode.DocumentSymbolProvider {
         return entries.map(e => {
             const kind = e.kind === 'definition' ? vscode.SymbolKind.Function : vscode.SymbolKind.Variable;
             const range = new vscode.Range(e.line, 0, e.line, e.character + e.name.length);
-            return new vscode.DocumentSymbol(e.name, e.kind, kind, range, range);
+            return new vscode.DocumentSymbol(e.qualifiedName, e.kind, kind, range, range);
         });
     }
 }
@@ -95,7 +95,7 @@ export class HoverProvider implements vscode.HoverProvider {
         
         entries.slice(0, 5).forEach(e => {
             const fileName = vscode.Uri.parse(e.uri).path.split('/').pop();
-            md.appendMarkdown(`- Defined in \`${fileName}\` (Line ${e.line + 1})\n`);
+            md.appendMarkdown(`- \`${e.qualifiedName}\` defined in \`${fileName}\` (Line ${e.line + 1})\n`);
         });
         
         if (entries.length > 5) {

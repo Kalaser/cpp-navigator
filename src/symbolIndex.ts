@@ -1,26 +1,36 @@
 import { SymbolEntry } from './types';
 
 export class SymbolIndex {
-    // name → 所有匹配的符号（可能跨文件有多个定义）
+    // qualifiedName → 所有匹配的符号（可能跨文件有多个定义）
     private defMap  = new Map<string, SymbolEntry[]>();
+    private defNameMap  = new Map<string, SymbolEntry[]>();
     private declMap = new Map<string, SymbolEntry[]>();
+    private declNameMap = new Map<string, SymbolEntry[]>();
 
     clear() {
         this.defMap.clear();
+        this.defNameMap.clear();
         this.declMap.clear();
+        this.declNameMap.clear();
     }
 
     addEntries(entries: SymbolEntry[]) {
         for (const e of entries) {
             const map = e.kind === 'definition' ? this.defMap : this.declMap;
-            if (!map.has(e.name)) map.set(e.name, []);
-            map.get(e.name)!.push(e);
+            const nameMap = e.kind === 'definition' ? this.defNameMap : this.declNameMap;
+            const qName = e.qualifiedName;
+
+            if (!map.has(qName)) map.set(qName, []);
+            map.get(qName)!.push(e);
+
+            if (!nameMap.has(e.name)) nameMap.set(e.name, []);
+            nameMap.get(e.name)!.push(e);
         }
     }
 
     // 移除某个文件的所有符号（文件保存时增量更新用）
     removeFile(uri: string) {
-        for (const map of [this.defMap, this.declMap]) {
+        for (const map of [this.defMap, this.defNameMap, this.declMap, this.declNameMap]) {
             for (const [key, entries] of map) {
                 const filtered = entries.filter(e => e.uri !== uri);
                 if (filtered.length === 0) map.delete(key);
@@ -30,18 +40,26 @@ export class SymbolIndex {
     }
 
     getDefinitions(name: string): SymbolEntry[] {
-        return this.defMap.get(name) ?? [];
+        if (name.includes('::')) return this.defMap.get(name) ?? [];
+        return this.defNameMap.get(name) ?? [];
     }
 
     getDeclarations(name: string): SymbolEntry[] {
-        return this.declMap.get(name) ?? [];
+        if (name.includes('::')) return this.declMap.get(name) ?? [];
+        return this.declNameMap.get(name) ?? [];
     }
 
     // 查找所有引用（定义 + 声明都算）
     getAllEntries(name: string): SymbolEntry[] {
+        if (name.includes('::')) {
+            return [
+                ...(this.defMap.get(name) ?? []),
+                ...(this.declMap.get(name) ?? []),
+            ];
+        }
         return [
-            ...(this.defMap.get(name) ?? []),
-            ...(this.declMap.get(name) ?? []),
+            ...(this.defNameMap.get(name) ?? []),
+            ...(this.declNameMap.get(name) ?? []),
         ];
     }
 

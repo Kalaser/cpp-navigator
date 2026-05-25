@@ -1,5 +1,6 @@
 export interface SymbolEntry {
     name: string;
+    qualifiedName: string;
     kind: 'definition' | 'declaration';
     uri: string;           // vscode.Uri.toString()
     line: number;          // 0-based

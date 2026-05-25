@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { scanDirectory, scanFile } from './indexBuilder';
 import { SymbolIndex } from './symbolIndex';
 import { DefinitionProvider, DeclarationProvider, ReferenceProvider, WorkspaceSymbolProvider, DocumentSymbolProvider, HoverProvider } from './providers';
 import { detectProject } from './projectDetector';
 
 const index = new SymbolIndex();
+let currentBuild: Promise<void> | null = null;
 
 function getConfig() {
     const cfg = vscode.workspace.getConfiguration('cppNavigator');
@@ -23,36 +23,32 @@ function getConfig() {
     };
 }
 
-async function buildIndex(showProgress = true) {
-    const cfg = vscode.workspace.getConfiguration('cppNavigator');
-    const userConfigs  = cfg.get<string[]>('activeConfigs', []);
-    const extraRoots   = cfg.get<string[]>('extraRoots', []);
-    const excludePatterns = cfg.get<string[]>('excludePatterns', [
-        '**/build/**',
-        '**/out/**',
-        '**/.git/**',
-        '**/node_modules/**',
-        '**/CMakeFiles/**',
-        '**/compile_commands.json'
-    ]);
+async function buildIndex(showProgress = true): Promise<void> {
+    if (currentBuild) {
+        await currentBuild;
+        return buildIndex(showProgress);
+    }
 
+    const cfg = getConfig();
     const wsFolders = vscode.workspace.workspaceFolders ?? [];
     const roots = [
         ...wsFolders.map(f => f.uri.fsPath),
-        ...extraRoots,
+        ...cfg.extraRoots,
     ];
 
     const autoCtx = detectProject(wsFolders[0]?.uri.fsPath ?? '');
     const activeConfigs = new Set([
-        ...autoCtx.defines,   // 自动发现
-        ...userConfigs,       // 用户手动追加
+        ...autoCtx.defines,
+        ...cfg.activeConfigs,
     ]);
 
     index.clear();
 
     const task = async () => {
-        for (const root of roots) {
-            const entries = await scanDirectory(root, activeConfigs, excludePatterns);
+        const entriesForRoots = await Promise.all(
+            roots.map(root => scanDirectory(root, activeConfigs, cfg.excludePatterns))
+        );
+        for (const entries of entriesForRoots) {
             index.addEntries(entries);
         }
         vscode.window.setStatusBarMessage(
@@ -60,19 +56,23 @@ async function buildIndex(showProgress = true) {
         );
     };
 
-    if (showProgress) {
-        await vscode.window.withProgress(
+    currentBuild = showProgress
+        ? Promise.resolve(vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: 'C/C++ Navigator: Indexing...' },
             task
-        );
-    } else {
-        await task();
+        ).then(() => {}))
+        : task();
+
+    try {
+        await currentBuild;
+    } finally {
+        currentBuild = null;
     }
 }
 
 export async function activate(context: vscode.ExtensionContext) {
-    // 首次构建索引
-    await buildIndex();
+    // 立即注册语言服务，索引在后台构建以避免阻塞激活
+    void buildIndex();
 
     const selector: vscode.DocumentSelector = [
         { scheme: 'file', language: 'c' },
