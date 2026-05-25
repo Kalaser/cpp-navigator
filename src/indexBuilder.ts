@@ -18,9 +18,18 @@ const RE = {
     // typedef
     typedefSimple: new RegExp('^typedef\\s+[\\w\\s\\*&:<>,~]+\\b(' + NAME_PATTERN + ')\\s*;'),
 
-    // struct/union/enum 定义（支持 typedef 和匿名形式）
-    structDefAnon: /^(?:typedef\s+)?(?:struct|union|enum)\s*\{/,
-    structDefNamed: new RegExp('(?:struct|union|enum)\\s+(' + NAME_PATTERN + ')(?:\\s*[:{;]|\\s*$)'),
+    // struct/union/enum 完整定义（包括多行），支持 typedef struct Foo {、struct Foo : Base {、__attribute__ 等
+    structWithName: /^(?:typedef\s+)?(?:struct|union|enum)\s+(?:alignas\([^)]*\)|__attribute__\s*\(\([^)]*\)\)|final|sealed|public|private|protected|virtual|static|constexpr|typename|template|explicit|friend|volatile|mutable)*\s*(\w+)\b(?:\s+(?:alignas\([^)]*\)|__attribute__\s*\(\([^)]*\)\)|final|sealed|public|private|protected|virtual|static|constexpr|typename|template|explicit|friend|volatile|mutable|:\s*[^\{;]+))*\s*(?:\{|;)/,
+    typedefStructOpen: /^typedef\s+(?:struct|union|enum)\s+(?:alignas\([^)]*\)|__attribute__\s*\(\([^)]*\)\)|final|sealed|public|private|protected|virtual|static|constexpr|typename|template|explicit|friend|volatile|mutable)*\s*(\w+)\b(?:\s+(?:alignas\([^)]*\)|__attribute__\s*\(\([^)]*\)\)|final|sealed|public|private|protected|virtual|static|constexpr|typename|template|explicit|friend|volatile|mutable|:\s*[^\{;]+))*\s*\{/, 
+    
+    // 结构体/枚举定义开括号（用于追踪作用域）
+    structOpenBrace: /(?:struct|union|enum)\s+(\w+)\s*\{/, 
+    
+    // 匿名结构体
+    structAnon: /(?:struct|union|enum)\s*\{/,
+    
+    // 结尾名称模式：} Name; 或 } Name
+    endWithName: /^}\s*(\w+)\s*;?\s*$/,
 
     // 宏定义
     macroDefine: new RegExp('^#define\\s+(' + NAME_PATTERN + ')'),
@@ -31,7 +40,7 @@ const RE = {
     else:   /^#\s*else\b/,
     endif:  /^#\s*endif\b/,
     namespaceOpen: /^namespace\s+([\w:]+)\s*(\{)?/,
-    classStructOpen: /^(?:class|struct)\s+(\w+)\b[^;{]*\{/,
+    classStructOpen: /^(?:class|struct|union)\s+(\w+)\b[^;{]*\{/,
 };
 
 // ── 关键字过滤表 ──────────────────────────────────────────
@@ -144,9 +153,10 @@ export async function scanFile(
                 pendingScope = name;
             }
         } else if ((scopeMatch = raw.match(RE.classStructOpen))) {
+            // class/struct/union 定义
             scopeStack.push({ name: scopeMatch[1], startDepth: braceDepth });
-        } else if ((scopeMatch = raw.match(/^(?:class|struct|union)\s+(\w+)\b[^;{]*\{/))) {
-            // 处理 class/struct/union 的作用域
+        } else if ((scopeMatch = raw.match(RE.typedefStructOpen))) {
+            // typedef struct/union/enum Foo { ... }
             scopeStack.push({ name: scopeMatch[1], startDepth: braceDepth });
         } else if (pendingScope && raw.includes('{')) {
             scopeStack.push({ name: pendingScope, startDepth: braceDepth });
@@ -183,43 +193,42 @@ export async function scanFile(
             });
         };
 
-        // 宏定义
-        if ((m = raw.match(RE.macroDefine))) {
-            addSym(m[1], 'definition');
-        } 
-        // struct/union/enum 定义
-        else if ((m = raw.match(RE.structDefNamed))) {
-            addSym(m[1], 'definition');
-        } 
-        // typedef 类型别名（处理 typedef struct/union/enum {...} Name; 的 Name 部分）
-        else if (raw.startsWith('typedef') && raw.endsWith(';')) {
-            const typedefMatch = raw.match(/^typedef\s+(?:struct|union|enum)?\s*[\w\s{};,\*&<>]+\s+(\w+)\s*;/);
+        // 1. 处理 typedef 语句（包括 typedef struct/union/enum {...} Name;）
+        if (raw.startsWith('typedef') && raw.endsWith(';')) {
+            // 格式: typedef struct/union/enum [Name] {...} TypeName;
+            // 或: typedef Type TypeName;
+            const typedefMatch = raw.match(/\s+(\w+)\s*;$/);  // 获取最后的名称
             if (typedefMatch) {
-                addSym(typedefMatch[1], 'definition');
-            } else {
-                const simpleMatch = raw.match(RE.typedefSimple);
-                if (simpleMatch) addSym(simpleMatch[1], 'definition');
-            }
-        }
-        // 结构体/枚举结束后带名称的情况：} Name;
-        else if (raw.match(/^}\s*(\w+)\s*;?\s*$/)) {
-            const match = raw.match(/^}\s*(\w+)\s*;?\s*$/);
-            if (match) {
-                const name = match[1];
+                const name = typedefMatch[1];
                 if (!KEYWORDS.has(name) && name.length >= 2) {
                     addSym(name, 'definition');
                 }
             }
+        } 
+        // 2. 处理 struct/union/enum 定义
+        else if ((m = raw.match(RE.structWithName))) {
+            addSym(m[1], 'definition');
+        } 
+        // 3. 处理结构体/枚举结束后的名称：} Name; 或 } Name
+        else if ((m = raw.match(RE.endWithName))) {
+            const name = m[1];
+            if (!KEYWORDS.has(name) && name.length >= 2) {
+                addSym(name, 'definition');
+            }
         }
-        // 函数定义
+        // 4. 宏定义
+        else if ((m = raw.match(RE.macroDefine))) {
+            addSym(m[1], 'definition');
+        } 
+        // 5. 函数定义
         else if ((m = raw.match(RE.funcDef))) {
             addSym(m[1], 'definition');
         } 
-        // 函数声明
+        // 6. 函数声明
         else if ((m = raw.match(RE.funcDecl))) {
             addSym(m[1], 'declaration');
         }
-        // 变量定义（只在 .c 文件里匹配，避免头文件噪声）
+        // 7. 变量定义（只在 .c 文件里匹配，避免头文件噪声）
         else if (filePath.endsWith('.c') && (m = raw.match(RE.varDef))) {
             addSym(m[1], 'definition');
         }
