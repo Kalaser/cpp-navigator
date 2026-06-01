@@ -1,98 +1,174 @@
 # C/C++ Navigator 架构设计
 
-## 模块架构图
+本文描述当前实现的主要模块、数据流和扩展点。项目目标是用轻量索引和可选外部数据库，为大型 C/C++ 工程提供快速代码浏览能力。
 
-```mermaid
-graph TB
-    subgraph "启动阶段" [启动阶段]
-        A["extension.ts<br/>activate()"]
-        B["projectDetector.ts<br/>检测编译宏和路径"]
-        C["buildIndex()"]
-    end
+## 总体结构
 
-    subgraph "扫描阶段" [扫描阶段]
-        D["indexBuilder.ts<br/>scanDirectory()"]
-        E["scanFile()"]
-        F["正则匹配提取符号<br/>+ 作用域推导"]
-    end
-
-    subgraph "索引管理" [索引管理]
-        G["symbolIndex.ts<br/>SymbolIndex 类"]
-        H["defMap/declMap<br/>限定名索引"]
-        I["defNameMap/declNameMap<br/>简单名索引"]
-    end
-
-    subgraph "查询服务" [查询服务]
-        J["providers.ts"]
-        K["DefinitionProvider<br/>DeclarationProvider<br/>ReferenceProvider"]
-        L["WorkspaceSymbolProvider<br/>DocumentSymbolProvider<br/>HoverProvider"]
-    end
-
-    subgraph "增量更新" [增量更新]
-        M["onDidSaveTextDocument"]
-        N["removeFile() + addEntries()"]
-    end
-
-    A -->|并行扫描所有根目录| C
-    C -->|自动发现| B
-    C -->|并行扫描| D
-    D -->|批量处理 20 文件/批| E
-    E -->|提取 symbols| F
-    F -->|生成 SymbolEntry| G
-    G -->|双索引存储| H
-    G -->|双索引存储| I
-    J -->|查询命中| K
-    J -->|工作区搜索| L
-    K & L -->|查询用户光标位置单词| G
-    M -->|监听文件保存| N
-    N -->|更新索引| G
+```text
+VS Code Extension Host
+        |
+        v
+src/extension.ts
+        |
+        +-- projectDetector.ts
+        +-- indexBuilder.ts
+        +-- symbolIndex.ts
+        +-- db.ts
+        +-- providers.ts
+        +-- cscopeBackend.ts
+        +-- callHierarchyProvider.ts
+        +-- historyManager.ts
 ```
 
-## 数据流流程图
+## 模块职责
+
+| 模块 | 职责 |
+| --- | --- |
+| `extension.ts` | 插件生命周期、配置读取、命令注册、Provider 注册、状态栏、文件事件监听 |
+| `projectDetector.ts` | 从 `compile_commands.json`、`CMakeCache.txt`、`.config` 提取宏和 include 信息 |
+| `indexBuilder.ts` | 扫描 C/C++ 文件，移除注释，处理简单条件编译，提取符号 |
+| `symbolIndex.ts` | 内存索引，按简单名和限定名存储定义/声明 |
+| `db.ts` | 持久化索引，优先 SQLite，失败时降级 JSON |
+| `providers.ts` | Definition、Declaration、Reference、Workspace Symbol、Document Symbol、Hover |
+| `cscopeBackend.ts` | 构建/查询 `cscope.out`、构建/查询 `tags` |
+| `callHierarchyProvider.ts` | 基于 cscope 查询调用层级 |
+| `historyManager.ts` | 浏览历史 Tree View 和持久化 |
+| `types.ts` | 共享数据结构 |
+
+## 启动流程
 
 ```mermaid
 sequenceDiagram
     participant VS as VS Code
-    participant Ext as Extension
-    participant Proj as Project Detector
-    participant Builder as Index Builder
-    participant Index as Symbol Index
-    participant Provider as Providers
+    participant Ext as extension.ts
+    participant DB as db.ts
+    participant Index as symbolIndex.ts
+    participant Builder as indexBuilder.ts
+    participant Provider as providers.ts
 
     VS->>Ext: activate()
-    Ext->>Proj: detectProject()
-    Proj-->>Ext: 返回 defines[], includePaths[]
-    Ext->>Builder: scanDirectory() x 多个根
-    Builder->>Builder: findFiles() glob 查找
-    Builder->>Builder: scanFile() 逐文件处理
-    Note over Builder: 正则 + 作用域栈<br/>提取限定名
-    Builder-->>Index: addEntries()
-    Index->>Index: defMap 存限定名<br/>defNameMap 存简单名
-    Note over Index: A::foo -> defMap<br/>foo -> defNameMap
-
-    VS->>Provider: 用户点击 symbol
-    Provider->>Index: getDefinitions('foo')<br/>or getDefinitions('A::foo')
-    Index-->>Provider: SymbolEntry[]
-    Provider-->>VS: 返回 Location[]
+    Ext->>DB: open()
+    DB-->>Ext: load cached symbols
+    Ext->>Index: addEntries(cached)
+    Ext->>Provider: register providers
+    Ext->>Builder: buildIndexIncremental(false)
+    Builder-->>Index: changed file symbols
+    Builder-->>DB: updateFile()
 ```
 
-## 模块职责表
+启动时会先加载缓存索引，然后立刻注册 VS Code Provider。后台增量扫描会更新变化文件，因此插件可以较快进入可用状态。
 
-| 模块 | 职责 | 核心逻辑 |
-|------|------|--------|
-| **extension.ts** | 生命周期管理 | 激活 → 后台索引 + 注册 6 个 Provider + 监听文件变更 |
-| **projectDetector.ts** | 编译环境检测 | 读取 `compile_commands.json` / `CMakeCache.txt` / `.config` 提取宏 |
-| **indexBuilder.ts** | 文件扫描解析 | 正则匹配 + 条件编译分析 + 作用域栈推导 → 生成限定名 |
-| **symbolIndex.ts** | 内存索引存储 | 4 个 Map：`defMap`/`declMap`（限定名）+ `defNameMap`/`declNameMap`（简单名）|
-| **providers.ts** | 语言服务 | 6 个 VSCode Provider：定义、声明、引用、工作区搜索、大纲、悬停 |
-| **types.ts** | 数据结构 | `SymbolEntry` 包含 `name` + `qualifiedName` + 位置 + 宏条件 |
+## 索引数据结构
 
-## 核心优化点
+核心结构定义在 `types.ts`：
 
-1. **后台索引**：激活时立即注册 Provider，索引在后台构建
-2. **并行扫描**：多根目录并行扫描，单目录内文件按 20 为单位批量处理
-3. **双重索引**：同时支持 `foo` 和 `A::foo` 查询
-4. **增量更新**：文件保存时只重新扫描该文件
-5. **作用域追踪**：通过大括号嵌套深度推导 `namespace::class::function`
-6. **条件编译**：支持 `#ifdef` / `#ifndef` / `#elif` / `#else` 嵌套分析
-7. **宏拼接**：正则支持 `##` 操作符识别宏生成的标识符
+```ts
+export interface SymbolEntry {
+    name: string;
+    qualifiedName: string;
+    kind: 'definition' | 'declaration';
+    uri: string;
+    line: number;
+    character: number;
+    ifdefStack: string[];
+}
+```
+
+`SymbolIndex` 维护四个 Map：
+
+| Map | Key | Value |
+| --- | --- | --- |
+| `defMap` | `qualifiedName` | 定义列表 |
+| `defNameMap` | `name` | 定义列表 |
+| `declMap` | `qualifiedName` | 声明列表 |
+| `declNameMap` | `name` | 声明列表 |
+
+这样可以同时支持：
+
+- `foo` 这样的简单名查询
+- `ns::Class::foo` 这样的限定名查询
+
+## 内置索引流程
+
+```mermaid
+flowchart TD
+    A[findFiles] --> B[batch scan files]
+    B --> C[read file]
+    C --> D[strip comments]
+    D --> E[preprocessor condition stack]
+    E --> F[scope stack]
+    F --> G[regex symbol extraction]
+    G --> H[SymbolEntry]
+    H --> I[SymbolIndex]
+    H --> J[IndexDatabase]
+```
+
+内置索引器的设计取舍：
+
+- 用文本扫描换取速度和低资源占用。
+- 使用作用域栈推导 `namespace::class::symbol`。
+- 使用条件栈过滤明显不活跃的代码分支。
+- 不做完整 AST、类型系统、宏展开和模板实例化。
+
+## 持久化策略
+
+`IndexDatabase` 有两种工作模式：
+
+1. SQLite 模式：如果 `better-sqlite3` 可加载，则写入 `symbol-index.db`。
+2. JSON 模式：如果 SQLite 原生模块不可用，则写入 `symbol-index.json`。
+
+这种设计是为了降低 Windows 和远程开发环境中的安装阻力。`better-sqlite3` 是可选依赖，即使原生模块构建失败，插件也仍可工作。
+
+## 外部数据库后端
+
+`CscopeBackend` 当前支持：
+
+- 检测 `cscope` / `ctags` 是否可用。
+- 生成 `cscope.files`。
+- 构建 `cscope.out`。
+- 构建 `tags`。
+- 使用 `cscope -L` 查询定义、引用、调用者和被调用者。
+- 当 cscope 查不到定义时，从 `tags` 文件 fallback 查询定义。
+
+后续可扩展：
+
+- `readtags` 精确查询。
+- GNU Global / gtags 后端。
+- 数据库路径配置。
+- 使用内置可执行文件。
+
+## VS Code Provider 映射
+
+| VS Code 能力 | 实现 |
+| --- | --- |
+| DefinitionProvider | `DefinitionProvider` / `CscopeDefinitionProvider` |
+| DeclarationProvider | `DeclarationProvider` |
+| ReferenceProvider | `ReferenceProvider` / `CscopeReferenceProvider` |
+| WorkspaceSymbolProvider | `WorkspaceSymbolProvider` |
+| DocumentSymbolProvider | `DocumentSymbolProvider` |
+| HoverProvider | `HoverProvider` |
+| CallHierarchyProvider | `CallHierarchyProvider` |
+| TreeDataProvider | `HistoryManager` |
+
+## 文件事件
+
+| 事件 | 行为 |
+| --- | --- |
+| 保存 C/C++ 文件 | 重新扫描该文件，替换 DB 和内存索引中的旧符号 |
+| 删除文件 | 从 DB 和内存索引中删除该文件符号 |
+| 配置变化 | 触发后台增量索引 |
+
+## 命令流
+
+| 命令 | 主要调用 |
+| --- | --- |
+| `cppNavigator.rebuildIndex` | `buildIndexIncremental(true)` |
+| `cppNavigator.buildCscopeDb` | `CscopeBackend.buildCscope()` + `buildCtags()` |
+| `cppNavigator.rebuildAll` | 外部数据库构建 + 内置索引构建 |
+| `cppNavigator.searchSymbol` | `SymbolIndex.search()` + QuickPick |
+| `cppNavigator.previewDefinition` | `SymbolIndex.getDefinitions()` + Webview |
+| `cppNavigator.searchSelectedText` | VS Code `workbench.action.findInFiles` |
+
+## 当前边界
+
+该架构刻意不追求完整 C/C++ 语义分析。对于复杂跳转准确性，优先通过 cscope、ctags、未来的 gtags/readtags 后端增强；内置索引保留为快速、低依赖、低资源的基础能力。

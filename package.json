@@ -1,50 +1,116 @@
 {
   "name": "cpp-navigator",
+  "publisher": "local",
   "displayName": "C/C++ Navigator",
-  "version": "0.0.5",
-  "publisher": "Kalaser",
-  "description": "轻量级、高性能的 C/C++ 符号索引与跳转工具",
-  "icon": "images/icon.png",
-  "categories": [
-    "Programming Languages",
-    "Navigation"
-  ],
-  "keywords": [
-    "c",
-    "c++",
-    "cpp",
-    "navigation",
-    "symbols"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Kalaser/cpp-navigator"
-  },
+  "description": "Fast C/C++ code navigation using cscope/ctags or the built-in indexer",
+  "version": "1.0.0",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.85.0"
   },
+  "categories": [
+    "Programming Languages"
+  ],
   "activationEvents": [
     "onLanguage:c",
-    "onLanguage:cpp"
+    "onLanguage:cpp",
+    "onView:cppNavigator.historyView"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "cppNavigator.rebuildIndex",
-        "title": "C/C++ Navigator: Rebuild Index"
+        "title": "C/C++ Navigator: Rebuild Index (incremental)"
+      },
+      {
+        "command": "cppNavigator.buildCscopeDb",
+        "title": "C/C++ Navigator: Build cscope/ctags Database"
+      },
+      {
+        "command": "cppNavigator.rebuildAll",
+        "title": "C/C++ Navigator: Rebuild All (cscope + index)"
+      },
+      {
+        "command": "cppNavigator.showStats",
+        "title": "C/C++ Navigator: Show Index Stats"
+      },
+      {
+        "command": "cppNavigator.clearHistory",
+        "title": "C/C++ Navigator: Clear Browse History",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "cppNavigator.searchSymbol",
+        "title": "C/C++ Navigator: Search Symbol"
+      },
+      {
+        "command": "cppNavigator.previewDefinition",
+        "title": "C/C++ Navigator: Preview Definition"
+      },
+      {
+        "command": "cppNavigator.searchSelectedText",
+        "title": "C/C++ Navigator: Search Selected Text"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "cppNavigator.historyView",
+          "name": "C/C++ Browse History"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "cppNavigator.clearHistory",
+          "when": "view == cppNavigator.historyView",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "cppNavigator.previewDefinition",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cppNavigator.searchSelectedText",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "C/C++ Navigator",
       "properties": {
+        "cppNavigator.backend": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "cscope",
+            "builtin"
+          ],
+          "default": "auto",
+          "description": "Backend: auto detects cscope databases, cscope forces cscope, builtin uses the internal indexer."
+        },
+        "cppNavigator.cscopeCmd": {
+          "type": "string",
+          "default": "cscope",
+          "description": "Path to the cscope executable."
+        },
+        "cppNavigator.ctagsCmd": {
+          "type": "string",
+          "default": "ctags",
+          "description": "Path to the ctags executable."
+        },
         "cppNavigator.activeConfigs": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "激活的条件编译宏"
+          "description": "Active preprocessor macros used by the builtin #ifdef filter."
         },
         "cppNavigator.extraRoots": {
           "type": "array",
@@ -52,7 +118,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "额外索引的仓库根目录（绝对路径或相对工作区的路径）"
+          "description": "Extra roots to index, such as vendor or SDK folders."
         },
         "cppNavigator.excludePatterns": {
           "type": "array",
@@ -64,22 +130,26 @@
             "**/out/**",
             "**/.git/**",
             "**/node_modules/**",
-            "**/CMakeFiles/**",
-            "**/compile_commands.json"
+            "**/CMakeFiles/**"
           ],
-          "description": "排除的目录 glob"
+          "description": "Glob patterns excluded from indexing."
         }
       }
     }
   },
   "scripts": {
-    "clean": "npx rimraf out *.vsix",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
   },
   "devDependencies": {
-    "@types/vscode": "^1.80.0",
-    "@types/node": "^18.0.0",
-    "typescript": "^5.0.0"
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "typescript": "^5.3.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^9.4.3"
   }
 }
