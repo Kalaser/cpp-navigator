@@ -24,19 +24,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Compile and Package
-        run: |
-          npm run compile
-          npx @vscode/vsce package
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Package Extension
+        run: npm run package
 
       - name: Upload VSIX Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cpp-navigator-extension
+          name: cpp-navigator
           path: "*.vsix"
 
       - name: Create GitHub Release
