@@ -4,6 +4,11 @@
   "displayName": "C/C++ Navigator",
   "description": "Fast C/C++ code navigation using cscope/ctags or the built-in indexer",
   "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kalaser/cpp-navigator.git"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
