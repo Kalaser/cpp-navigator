@@ -56,6 +56,10 @@ export class AiReviewService {
         return this.getBaseConfig().batchSize;
     }
 
+    async isReady(): Promise<boolean> {
+        return this.getBaseConfig().enabled && (await this.hasApiKey());
+    }
+
     async hasApiKey(provider = this.getBaseConfig().provider): Promise<boolean> {
         return (await this.resolveApiKey(provider)).length > 0;
     }
@@ -105,6 +109,148 @@ export class AiReviewService {
         }
 
         return { decisions: reviewed, inferredSymbols };
+    }
+
+    // ── 通用 AI 分析方法（供各 Provider 调用）─────────────────
+
+    /** 多定义消歧：当同一符号存在多个定义时，根据上下文判断正确的一个 */
+    async disambiguateDefinition(
+        word: string,
+        contextSnippet: string,
+        candidates: Array<{ file: string; line: number; snippet: string }>
+    ): Promise<number> {
+        const prompt = [
+            `The user is looking at symbol "${word}" in this context:`,
+            '```cpp',
+            contextSnippet,
+            '```',
+            '',
+            `There are ${candidates.length} definitions with the same name. Which one is the correct target?`,
+            ...candidates.map((c, i) => `[${i}] ${c.file}:${c.line + 1}\n${c.snippet}`),
+            '',
+            'Return JSON: {"index": <number>, "reason": "<brief>"}',
+        ].join('\n');
+
+        const raw = await this.askQuick(prompt, 10000);
+        if (raw === null) return 0;
+        try {
+            const parsed = JSON.parse(raw);
+            const idx = typeof parsed.index === 'number' ? parsed.index : 0;
+            return idx >= 0 && idx < candidates.length ? idx : 0;
+        } catch { return 0; }
+    }
+
+    /** 引用过滤：从文本搜索结果中剔除注释、字符串、宏等误匹配 */
+    async filterReferences(
+        word: string,
+        candidates: Array<{ file: string; line: number; snippet: string }>
+    ): Promise<number[]> {
+        if (candidates.length === 0) return [];
+        const prompt = [
+            `A text search for C/C++ symbol "${word}" found these locations.`,
+            'Filter out false positives: matches in comments, string literals, macro bodies, or unrelated scopes.',
+            'Return JSON: {"validIndices": [0, 2, ...]} — only indices of real call/reference sites.',
+            '',
+            ...candidates.map((c, i) => `[${i}] ${c.file}:${c.line + 1}\n${c.snippet}`),
+        ].join('\n');
+
+        const raw = await this.askQuick(prompt, 15000);
+        if (raw === null) return candidates.map((_, i) => i);
+        try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed.validIndices) ? parsed.validIndices : candidates.map((_, i) => i);
+        } catch { return candidates.map((_, i) => i); }
+    }
+
+    /** 调用层级分析：验证 caller/callee 结果，推断函数指针回调 */
+    async analyzeCallHierarchy(
+        symbol: string,
+        direction: 'incoming' | 'outgoing',
+        candidates: Array<{ name: string; file: string; line: number; snippet: string }>
+    ): Promise<{ valid: number[]; inferred: string[] }> {
+        if (candidates.length === 0) return { valid: [], inferred: [] };
+        const dirLabel = direction === 'incoming' ? 'callers' : 'callees';
+        const prompt = [
+            `Analyze the ${dirLabel} of C/C++ function "${symbol}".`,
+            'Verify which candidates are real call relationships. Also infer function-pointer/callback targets if visible.',
+            '',
+            ...candidates.map((c, i) => `[${i}] ${c.name} @ ${c.file}:${c.line + 1}\n${c.snippet}`),
+            '',
+            'Return JSON: {"validIndices": [0,1,...], "inferredSymbols": ["name1","name2",...]}',
+        ].join('\n');
+
+        const raw = await this.askQuick(prompt, 15000);
+        if (raw === null) return { valid: candidates.map((_, i) => i), inferred: [] };
+        try {
+            const parsed = JSON.parse(raw);
+            return {
+                valid: Array.isArray(parsed.validIndices) ? parsed.validIndices : candidates.map((_, i) => i),
+                inferred: Array.isArray(parsed.inferredSymbols) ? parsed.inferredSymbols : [],
+            };
+        } catch { return { valid: candidates.map((_, i) => i), inferred: [] }; }
+    }
+
+    /** Hover 增强：为符号生成简短的中文功能说明 */
+    async summarizeSymbol(word: string, snippet: string): Promise<string | null> {
+        const prompt = [
+            'In 1-2 sentences (Chinese), describe what this C/C++ function/symbol does:',
+            '```cpp',
+            snippet,
+            '```',
+            '',
+            'Return JSON: {"summary": "..."}',
+        ].join('\n');
+
+        const raw = await this.askQuick(prompt, 10000);
+        if (raw === null) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            return typeof parsed.summary === 'string' ? parsed.summary : null;
+        } catch { return null; }
+    }
+
+    /** 通用快速 AI 请求（轻量级，各分析方法共用） */
+    private async askQuick(prompt: string, timeoutMs?: number): Promise<string | null> {
+        const cfg = await this.getConfig();
+        if (!cfg.enabled || !cfg.apiKey) return null;
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs ?? Math.min(cfg.timeoutMs, 15000));
+
+        try {
+            const response = await fetch(toChatCompletionsUrl(cfg.endpoint), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${cfg.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: cfg.model,
+                    stream: false,
+                    temperature: 0,
+                    response_format: { type: 'json_object' },
+                    messages: [
+                        { role: 'system', content: 'You are a precise C/C++ code analysis assistant. Return JSON only.' },
+                        { role: 'user', content: prompt },
+                    ],
+                }),
+                signal: controller.signal,
+            });
+
+            if (!response.ok) return null;
+            const payload = await response.json() as DeepSeekChatCompletionResponse;
+            const content = payload.choices?.[0]?.message?.content ?? '';
+            const trimmed = content.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+            // 尝试提取 JSON 对象
+            const start = trimmed.indexOf('{');
+            const end = trimmed.lastIndexOf('}');
+            if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
+            return trimmed;
+        } catch {
+            return null;
+        } finally {
+            clearTimeout(timer);
+        }
     }
 
     private getBaseConfig(): Omit<AiReviewRuntimeConfig, 'apiKey'> {

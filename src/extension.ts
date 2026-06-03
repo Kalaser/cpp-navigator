@@ -376,24 +376,24 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.registerTreeDataProvider('cppNavigator.callTreeView', callTreeManager),
     );
 
-    // 9. 注册 Provider
+    // 9. 注册 Provider（AI 可用时自动注入）
     context.subscriptions.push(
         vscode.languages.registerDefinitionProvider(selector,
             useCscope && cscopeBackend
                 ? new CscopeDefinitionProvider(cscopeBackend, index)
-                : new DefinitionProvider(index, historyManager)
+                : new DefinitionProvider(index, historyManager, aiReviewService)
         ),
         vscode.languages.registerDeclarationProvider(selector, new DeclarationProvider(index, historyManager)),
         vscode.languages.registerReferenceProvider(selector,
             useCscope && cscopeBackend
                 ? new CscopeReferenceProvider(cscopeBackend, index)
-                : new ReferenceProvider(index, historyManager)
+                : new ReferenceProvider(index, historyManager, aiReviewService)
         ),
         vscode.languages.registerDocumentSymbolProvider(selector, new DocumentSymbolProvider(index)),
         vscode.languages.registerWorkspaceSymbolProvider(new WorkspaceSymbolProvider(index)),
-        vscode.languages.registerHoverProvider(selector, new HoverProvider(index)),
+        vscode.languages.registerHoverProvider(selector, new HoverProvider(index, aiReviewService)),
         vscode.languages.registerCallHierarchyProvider(selector,
-            new CallHierarchyProvider(effectiveCscope, index)
+            new CallHierarchyProvider(effectiveCscope, index, aiReviewService)
         )
     );
 

@@ -3,16 +3,18 @@ import * as fs from 'fs';
 import { CscopeBackend } from './cscopeBackend';
 import { SymbolIndex } from './symbolIndex';
 import { SymbolEntry } from './types';
+import { AiReviewService } from './services/aiReviewService';
 
 /**
  * Native VS Code CallHierarchyProvider
  * 注册后支持 Shift+Alt+H (Peek Call Hierarchy)
- * 使用 cscope 后端或 builtin 文本分析
+ * 使用 cscope 后端或 builtin 文本分析，AI 可用时自动验证
  */
 export class CallHierarchyProvider implements vscode.CallHierarchyProvider {
     constructor(
         private cscope: CscopeBackend | null,
-        private index: SymbolIndex
+        private index: SymbolIndex,
+        private aiService?: AiReviewService
     ) {}
 
     async prepareCallHierarchy(
@@ -39,9 +41,24 @@ export class CallHierarchyProvider implements vscode.CallHierarchyProvider {
     async provideCallHierarchyIncomingCalls(
         item: vscode.CallHierarchyItem
     ): Promise<vscode.CallHierarchyIncomingCall[]> {
-        const callers = this.cscope
+        let callers = this.cscope
             ? await this.cscope.findCallers(item.name)
             : await builtinFindCallers(item.name, this.index);
+
+        // AI 过滤假阳性 callers
+        if (this.aiService && callers.length > 0 && callers.length <= 50) {
+            try {
+                const candidates = callers.map(e => ({
+                    name: e.name, file: vscode.Uri.parse(e.uri).fsPath,
+                    line: e.line, snippet: `${e.name}(...)`,
+                }));
+                const { valid } = await this.aiService.analyzeCallHierarchy(item.name, 'incoming', candidates);
+                if (valid.length < callers.length) {
+                    callers = valid.map(i => callers[i]).filter(Boolean);
+                }
+            } catch { /* AI 失败走原始结果 */ }
+        }
+
         return callers.map(entry => new vscode.CallHierarchyIncomingCall(
             toCallHierarchyItem(entry),
             [new vscode.Range(entry.line, entry.character, entry.line, entry.character + entry.name.length)]
@@ -51,9 +68,24 @@ export class CallHierarchyProvider implements vscode.CallHierarchyProvider {
     async provideCallHierarchyOutgoingCalls(
         item: vscode.CallHierarchyItem
     ): Promise<vscode.CallHierarchyOutgoingCall[]> {
-        const callees = this.cscope
+        let callees = this.cscope
             ? await this.cscope.findCallees(item.name)
             : await builtinFindCallees(item.name, this.index);
+
+        // AI 过滤假阳性 callees + 推断函数指针回调
+        if (this.aiService && callees.length > 0 && callees.length <= 50) {
+            try {
+                const candidates = callees.map(e => ({
+                    name: e.name, file: vscode.Uri.parse(e.uri).fsPath,
+                    line: e.line, snippet: `${e.name}(...)`,
+                }));
+                const { valid } = await this.aiService.analyzeCallHierarchy(item.name, 'outgoing', candidates);
+                if (valid.length < callees.length) {
+                    callees = valid.map(i => callees[i]).filter(Boolean);
+                }
+            } catch { /* AI 失败走原始结果 */ }
+        }
+
         return callees.map(entry => new vscode.CallHierarchyOutgoingCall(
             toCallHierarchyItem(entry),
             [new vscode.Range(entry.line, entry.character, entry.line, entry.character + entry.name.length)]

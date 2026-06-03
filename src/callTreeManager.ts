@@ -54,6 +54,10 @@ export class CallTreeManager implements vscode.TreeDataProvider<CallTreeNodeItem
         this._onDidChangeTreeData.fire(undefined);
     }
 
+    hasActiveTree(): boolean {
+        return !!this.rootSymbol && !!this.index;
+    }
+
     clear(): void {
         this.rootSymbol = undefined;
         this.aiDecisions.clear();

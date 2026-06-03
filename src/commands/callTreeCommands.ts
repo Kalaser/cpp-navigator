@@ -52,10 +52,27 @@ export function registerShowCallTreeGraph(disposables: vscode.Disposable[]): voi
             const char = defs[0]?.character ?? 0;
             treeManager.startNewTrace(word, uri, line, char);
 
-            // 2. 构建 Webview
+            // 2. 构建 + AI 分析
+            const aiEnabled = await aiReviewService?.isReady() ?? false;
+            const title = aiEnabled
+                ? `$(sync~spin) AI analyzing call tree for "${word}"...`
+                : `$(sync~spin) Building call graph for "${word}"...`;
+
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title: `$(sync~spin) Building call graph for "${word}"...` },
+                { location: vscode.ProgressLocation.Notification, title },
                 async () => {
+                    // AI 先行：分析候选节点，标记 valid/invalid/inferred
+                    if (aiEnabled && aiReviewService) {
+                        try {
+                            await treeManager!.runAiReview(
+                                aiReviewService, activeConfigProvider?.() ?? []
+                            );
+                        } catch {
+                            // AI 失败不阻断建树，降级为原始结果
+                        }
+                    }
+
+                    // 导出并渲染（AI 决策已内置在树节点中）
                     const data = await treeManager!.exportTree();
                     if (!graphWebview) graphWebview = new CallGraphWebview();
                     graphWebview.render(word, data.callers, data.callees);
@@ -138,6 +155,13 @@ export function registerAiCleanCallTree(disposables: vscode.Disposable[]): void 
             if (!aiReviewService.isEnabled()) {
                 vscode.window.showWarningMessage(
                     'AI call-tree review is disabled. Enable cppNavigator.ai.enabled and configure a DeepSeek or Xiaomi API key first.'
+                );
+                return;
+            }
+
+            if (!treeManager.hasActiveTree()) {
+                vscode.window.showWarningMessage(
+                    'No call tree is active. Right-click a C/C++ symbol and select "Show Call Tree Graph" first, then run AI Clean.'
                 );
                 return;
             }
