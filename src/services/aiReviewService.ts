@@ -209,6 +209,71 @@ export class AiReviewService {
         } catch { return null; }
     }
 
+    /** 深度分析函数：AI 读取源码，输出功能说明、算法、注意事项 */
+    async analyzeFunction(word: string, snippet: string): Promise<string | null> {
+        const prompt = [
+            `请对以下 C/C++ 函数 "${word}" 进行深度分析。`,
+            '请用中文回答，包含以下内容：',
+            '1. **功能概述**：这个函数做什么',
+            '2. **核心逻辑**：关键算法或处理流程',
+            '3. **参数与返回值**：各参数含义、返回值语义',
+            '4. **调用关系**：调用了哪些关键函数，可能被谁调用',
+            '5. **注意事项**：潜在的 bug 风险、线程安全、内存问题等',
+            '',
+            '源码：',
+            '```cpp',
+            snippet,
+            '```',
+            '',
+            'Return JSON: {"analysis": "markdown formatted analysis"}',
+        ].join('\n');
+
+        const raw = await this.askQuick(prompt, 30000);
+        if (raw === null) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            return typeof parsed.analysis === 'string' ? parsed.analysis : null;
+        } catch { return null; }
+    }
+
+    /** 调用链分析：AI 解释函数的上下游调用关系和数据流 */
+    async explainCallChain(
+        word: string,
+        snippet: string,
+        callers: Array<{ name: string; file: string; line: number }>,
+        callees: Array<{ name: string; file: string; line: number }>
+    ): Promise<string | null> {
+        const prompt = [
+            `请分析 C/C++ 函数 "${word}" 的调用链。`,
+            '请用中文回答，包含：',
+            '1. **调用链概述**：这个函数在整体架构中的位置',
+            '2. **上游（谁调用了它）**：调用者的角色和调用场景',
+            '3. **下游（它调用了谁）**：被调用函数的作用',
+            '4. **数据流**：数据如何流入和流出这个函数',
+            '5. **潜在的回调/函数指针**：是否通过函数指针间接调用其他函数',
+            '',
+            '函数源码：',
+            '```cpp',
+            snippet,
+            '```',
+            '',
+            `上游调用者 (${callers.length} 个)：`,
+            ...callers.slice(0, 10).map(c => `- ${c.name} @ ${c.file}:${c.line + 1}`),
+            '',
+            `下游被调用者 (${callees.length} 个)：`,
+            ...callees.slice(0, 10).map(c => `- ${c.name} @ ${c.file}:${c.line + 1}`),
+            '',
+            'Return JSON: {"analysis": "markdown formatted analysis"}',
+        ].join('\n');
+
+        const raw = await this.askQuick(prompt, 30000);
+        if (raw === null) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            return typeof parsed.analysis === 'string' ? parsed.analysis : null;
+        } catch { return null; }
+    }
+
     /** 通用快速 AI 请求（轻量级，各分析方法共用） */
     private async askQuick(prompt: string, timeoutMs?: number): Promise<string | null> {
         const cfg = await this.getConfig();

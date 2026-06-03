@@ -96,6 +96,16 @@
       {
         "command": "cppNavigator.openCallTreeNode",
         "title": "Open Call Tree Node"
+      },
+      {
+        "command": "cppNavigator.aiAnalyzeFunction",
+        "title": "AI: Analyze Function",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "cppNavigator.aiExplainCallChain",
+        "title": "AI: Explain Call Chain",
+        "icon": "$(sparkle)"
       }
     ],
     "viewsContainers": {
@@ -176,6 +186,16 @@
           "command": "cppNavigator.linkToDefinition",
           "when": "editorLangId == c || editorLangId == cpp",
           "group": "cppNav@2"
+        },
+        {
+          "command": "cppNavigator.aiAnalyzeFunction",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "cppAi@1"
+        },
+        {
+          "command": "cppNavigator.aiExplainCallChain",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "cppAi@2"
         }
       ]
     },

@@ -453,6 +453,64 @@ export async function activate(context: vscode.ExtensionContext) {
     registerAiCleanCallTree(context.subscriptions);
     void maybePromptForDeepSeekApiKey(context, aiReviewService);
 
+    // 11b. AI 深度分析命令（右键菜单）
+    context.subscriptions.push(
+        vscode.commands.registerCommand('cppNavigator.aiAnalyzeFunction', async () => {
+            if (!(await aiReviewService.isReady())) {
+                vscode.window.showWarningMessage('AI is not enabled. Configure cppNavigator.ai settings first.');
+                return;
+            }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) return;
+            const word = getWord(editor.document, editor.selection.active);
+            if (!word) {
+                vscode.window.showWarningMessage('No symbol under cursor.');
+                return;
+            }
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `$(sparkle) AI analyzing "${word}"...` },
+                async () => {
+                    const snippet = await readSnippetForWord(word, index);
+                    const analysis = await aiReviewService.analyzeFunction(word, snippet);
+                    if (analysis) {
+                        showAiPanel(`AI Analysis: ${word}`, analysis);
+                    } else {
+                        vscode.window.showWarningMessage('AI analysis failed or returned empty.');
+                    }
+                }
+            );
+        }),
+        vscode.commands.registerCommand('cppNavigator.aiExplainCallChain', async () => {
+            if (!(await aiReviewService.isReady())) {
+                vscode.window.showWarningMessage('AI is not enabled. Configure cppNavigator.ai settings first.');
+                return;
+            }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) return;
+            const word = getWord(editor.document, editor.selection.active);
+            if (!word) {
+                vscode.window.showWarningMessage('No symbol under cursor.');
+                return;
+            }
+
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: `$(sparkle) AI analyzing call chain for "${word}"...` },
+                async () => {
+                    const snippet = await readSnippetForWord(word, index);
+                    const callers = await findRelatedSymbols(word, 'callers', cscopeBackend, index);
+                    const callees = await findRelatedSymbols(word, 'callees', cscopeBackend, index);
+                    const analysis = await aiReviewService.explainCallChain(word, snippet, callers, callees);
+                    if (analysis) {
+                        showAiPanel(`Call Chain: ${word}`, analysis);
+                    } else {
+                        vscode.window.showWarningMessage('AI analysis failed or returned empty.');
+                    }
+                }
+            );
+        })
+    );
+
     // 12. 文件事件
     context.subscriptions.push(
         vscode.workspace.onDidSaveTextDocument(async doc => {
@@ -501,6 +559,97 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {}
+
+// ── AI 辅助函数 ─────────────────────────────────────────────
+async function readSnippetForWord(word: string, idx: SymbolIndex): Promise<string> {
+    const defs = idx.getDefinitions(word);
+    if (defs.length === 0) return '';
+    const def = defs[0];
+    try {
+        const uri = vscode.Uri.parse(def.uri);
+        const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+        const lines = text.split(/\r?\n/);
+        const start = Math.max(0, def.line);
+        const end = Math.min(lines.length, start + 60);
+        return lines.slice(start, end).join('\n');
+    } catch { return ''; }
+}
+
+async function findRelatedSymbols(
+    word: string,
+    direction: 'callers' | 'callees',
+    cscope: CscopeBackend | null,
+    idx: SymbolIndex
+): Promise<Array<{ name: string; file: string; line: number }>> {
+    let entries: SymbolEntry[];
+    if (direction === 'callers') {
+        entries = cscope ? await cscope.findCallers(word) : idx.getAllEntries(word);
+    } else {
+        entries = cscope ? await cscope.findCallees(word) : [];
+        if (entries.length === 0) {
+            // builtin fallback: scan definitions
+            const defs = idx.getDefinitions(word);
+            if (defs.length > 0) {
+                try {
+                    const uri = vscode.Uri.parse(defs[0].uri);
+                    const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+                    const lines = text.split(/\r?\n/);
+                    const callRe = /\b([A-Za-z_]\w*)\s*\(/g;
+                    const bodyStart = defs[0].line;
+                    const bodyEnd = Math.min(lines.length, bodyStart + 80);
+                    for (let i = bodyStart; i < bodyEnd; i++) {
+                        let m: RegExpExecArray | null;
+                        callRe.lastIndex = 0;
+                        while ((m = callRe.exec(lines[i]))) {
+                            const name = m[1];
+                            const found = idx.getDefinitions(name);
+                            if (found.length > 0 && found[0].name !== word) {
+                                entries.push(found[0]);
+                            }
+                        }
+                    }
+                } catch { /* ignore */ }
+            }
+        }
+    }
+    const seen = new Set<string>();
+    return entries.filter(e => {
+        if (seen.has(e.name)) return false;
+        seen.add(e.name);
+        return true;
+    }).slice(0, 15).map(e => ({
+        name: e.name,
+        file: vscode.Uri.parse(e.uri).fsPath,
+        line: e.line,
+    }));
+}
+
+function showAiPanel(title: string, analysis: string): void {
+    const panel = vscode.window.createWebviewPanel(
+        'cppNavigator.aiAnalysis', title,
+        vscode.ViewColumn.Beside, { enableScripts: false }
+    );
+    // 简单 markdown → HTML 转换
+    const html = analysis
+        .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+        .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+        .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/^- (.+)$/gm, '<li>$1</li>')
+        .replace(/(<li>.*<\/li>\n?)+/gs, m => `<ul>${m}</ul>`)
+        .replace(/\n{2,}/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+    panel.webview.html = `<!doctype html><html><head><meta charset="utf-8"><style>
+        body{font-family:var(--vscode-editor-font-family);color:var(--vscode-editor-foreground);
+             background:var(--vscode-editor-background);padding:16px;line-height:1.6;max-width:800px;}
+        h2,h3,h4{color:var(--vscode-textLink-foreground);margin:16px 0 8px;}
+        code{background:var(--vscode-textCodeBlock-background);padding:2px 6px;border-radius:3px;font-size:0.9em;}
+        ul{padding-left:20px;}
+        li{margin:4px 0;}
+        strong{color:var(--vscode-editor-foreground);}
+    </style></head><body>${html}</body></html>`;
+}
 
 // ── cscope DefinitionProvider ─────────────────────────────────
 class CscopeDefinitionProvider implements vscode.DefinitionProvider {
