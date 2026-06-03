@@ -11,6 +11,8 @@
 - ✅ 多后端支持（auto/cscope/builtin）
 - ✅ 浏览历史 Tree View
 - ✅ cscope/ctags 数据库构建和查询
+- ✅ 调用树侧边栏、ECharts 图谱、手动链接和 AI 清理基础能力
+- ✅ AI 调用树复核支持 DeepSeek 与小米 MiMo API key
 
 ---
 
@@ -123,8 +125,8 @@
 
 ### 3.3 调用链记录
 
-- [ ] 调用链作为多层树记录
-- [ ] 调用链可视化（树状图）
+- [x] 调用链作为多层树记录（侧边栏懒加载）
+- [x] 调用链可视化（ECharts 关系图）
 - [ ] 调用链导出为文本/Markdown
 - [ ] 调用链复制到剪贴板
 
@@ -166,13 +168,13 @@
 
 ## 阶段 5：函数指针和手动映射 🔴
 
-**状态：未实现 | 优先级：高**
+**状态：基础版完成 | 优先级：高**
 
 ### 5.1 手动标记
 
-- [ ] 支持 `Mark Caller`（标记调用者）
+- [x] 支持 `Mark Caller`（标记调用者）
 - [ ] 支持 `Mark Definition`（标记定义）
-- [ ] 支持 `Link Caller`（链接调用者到定义）
+- [x] 支持 `Link Caller`（链接调用者到定义）
 - [ ] 支持 `Link Definition`（链接定义到调用者）
 
 ### 5.2 关系显示
@@ -311,14 +313,18 @@ interface ManualLink {
 
 ---
 
-## 阶段 9：AI 辅助（探索性）🔮
+## 阶段 9：AI 辅助（探索性）🟡
 
-**状态：调研中 | 优先级：低**
+**状态：基础版完成 | 优先级：低**
 
+- [x] 使用 LLM 复核调用树候选节点
+- [x] 支持 DeepSeek API key
+- [x] 支持小米 MiMo API key
+- [x] 支持 custom OpenAI-compatible endpoint
 - [ ] 使用 LLM 生成符号索引提示
 - [ ] 智能推荐相关符号
 - [ ] 代码理解摘要生成
-- [ ] 调用链自动注释
+- [ ] 调用链自动注释/解释
 
 ---
 
@@ -336,8 +342,10 @@ interface ManualLink {
 | Outline Window | ✅ 完成 | 1 |
 | Preview Window | ✅ 完成 | 1 |
 | Browser History Window | ✅ 完成 | 1 |
+| Call tree sidebar and graph | ✅ 部分完成 | 3 |
 | Call hierarchy export | 🔲 待实现 | 3 |
-| Manual function pointer map | 🔲 待实现 | 5 |
+| Manual function pointer map | ✅ 部分完成 | 5 |
+| AI call-tree cleanup | ✅ 部分完成 | 9 |
 | Non-active code gray display | 🔲 待实现 | 6 |
 | Status bar quick settings | 🔲 待实现 | 7 |
 | Internal executables | 🔲 待实现 | 7 |
@@ -375,4 +383,5 @@ interface ManualLink {
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-06-03 | v1.0.1 | 补充调用树、手动链接、AI 清理与小米 MiMo API key 支持状态 |
 | 2026-06-01 | v1.0.1 | 初始路线图，基于 SourceSeek 能力拆分 |

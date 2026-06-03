@@ -1,9 +1,12 @@
 .git/**
 .github/**
 .vscode/**
+.claude/**
+settings.json
 
 src/**
 docs/**
+ARCHITECTURE.md
 tsconfig.json
 settings.json
 ext.js

@@ -17,6 +17,10 @@ src/extension.ts
         +-- providers.ts
         +-- cscopeBackend.ts
         +-- callHierarchyProvider.ts
+        +-- callTreeManager.ts
+        +-- manualLinkManager.ts
+        +-- commands/callTreeCommands.ts
+        +-- services/aiReviewService.ts
         +-- historyManager.ts
 ```
 
@@ -32,6 +36,11 @@ src/extension.ts
 | `providers.ts` | Definition、Declaration、Reference、Workspace Symbol、Document Symbol、Hover |
 | `cscopeBackend.ts` | 构建/查询 `cscope.out`、构建/查询 `tags` |
 | `callHierarchyProvider.ts` | 基于 cscope 查询调用层级 |
+| `callTreeManager.ts` | 管理侧边栏调用树状态、懒加载节点、AI 清理结果合并 |
+| `manualLinkManager.ts` | 保存手动标记的 caller/callee 关系，补足函数指针等静态分析盲区 |
+| `commands/callTreeCommands.ts` | 调用树相关命令薄封装，连接编辑器、Tree View、Webview 和 AI 服务 |
+| `services/callAnalysisService.ts` | 调用分析辅助服务，处理缓存、主题和 Webview 数据 |
+| `services/aiReviewService.ts` | AI 调用树复核服务，支持 DeepSeek、小米 MiMo 和 custom OpenAI-compatible provider |
 | `historyManager.ts` | 浏览历史 Tree View 和持久化 |
 | `types.ts` | 共享数据结构 |
 
@@ -148,7 +157,45 @@ flowchart TD
 | DocumentSymbolProvider | `DocumentSymbolProvider` |
 | HoverProvider | `HoverProvider` |
 | CallHierarchyProvider | `CallHierarchyProvider` |
-| TreeDataProvider | `HistoryManager` |
+| TreeDataProvider | `HistoryManager` / `CallTreeManager` |
+
+## 调用树与 AI 复核流程
+
+调用树能力分为三层：
+
+1. `CallHierarchyProvider` 接入 VS Code 原生 Call Hierarchy。
+2. `CallTreeManager` 维护侧边栏 `C/C++ Call Tree` 的根节点、展开状态和懒加载结果。
+3. `CallGraphWebview` 将当前调用树导出为 ECharts 关系图。
+
+AI 清理是调用树上的可选后处理步骤：
+
+```mermaid
+sequenceDiagram
+    participant User as User
+    participant Cmd as callTreeCommands.ts
+    participant Tree as CallTreeManager
+    participant AI as AiReviewService
+    participant LLM as Provider API
+
+    User->>Cmd: AI Clean Call Tree
+    Cmd->>Tree: runAiReview()
+    Tree->>AI: reviewCandidates(target, direction, candidates)
+    AI->>AI: collect target signatures and snippets
+    AI->>LLM: POST /chat/completions
+    LLM-->>AI: JSON decisions
+    AI-->>Tree: valid / invalid / inferred nodes
+    Tree-->>Cmd: review summary
+```
+
+`AiReviewService` 使用 OpenAI-compatible Chat Completions 请求格式。内置 provider 默认值如下：
+
+| Provider | Endpoint | Model | SecretStorage key |
+| --- | --- | --- | --- |
+| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-pro` | `cppNavigator.deepSeekApiKey` |
+| `xiaomi` | `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `cppNavigator.xiaomiApiKey` |
+| `custom` | 由 `cppNavigator.ai.endpoint` 指定 | 由 `cppNavigator.ai.model` 指定 | `cppNavigator.deepSeekApiKey` |
+
+密钥优先从 VS Code SecretStorage 读取；没有存储密钥时，才回退到 settings 或环境变量。AI 请求会包含候选调用点附近的源码上下文，因此该能力默认关闭。
 
 ## 文件事件
 
@@ -168,6 +215,12 @@ flowchart TD
 | `cppNavigator.searchSymbol` | `SymbolIndex.search()` + QuickPick |
 | `cppNavigator.previewDefinition` | `SymbolIndex.getDefinitions()` + Webview |
 | `cppNavigator.searchSelectedText` | VS Code `workbench.action.findInFiles` |
+| `cppNavigator.showCallHierarchy` | VS Code `editor.action.showCallHierarchy` |
+| `cppNavigator.showCallTreeGraph` | `CallTreeManager.exportTree()` + `CallGraphWebview.render()` |
+| `cppNavigator.clearCallTree` | `CallTreeManager.clear()` |
+| `cppNavigator.aiCleanCallTree` | `CallTreeManager.runAiReview()` + `AiReviewService.reviewCandidates()` |
+| `cppNavigator.configureDeepSeekApiKey` | `AiReviewService.storeApiKey(..., 'deepseek')` + SecretStorage |
+| `cppNavigator.configureXiaomiApiKey` | `AiReviewService.storeApiKey(..., 'xiaomi')` + SecretStorage |
 
 ## 当前边界
 

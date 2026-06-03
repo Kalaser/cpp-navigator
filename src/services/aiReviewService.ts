@@ -1,0 +1,359 @@
+import * as vscode from 'vscode';
+import { AiReviewCandidate, AiReviewDecision, AiReviewRequest, AiReviewResult, CallDirection, SymbolEntry } from '../types';
+import { SymbolIndex } from '../symbolIndex';
+
+interface AiReviewRuntimeConfig {
+    enabled: boolean;
+    provider: AiProvider;
+    endpoint: string;
+    apiKey: string;
+    model: string;
+    timeoutMs: number;
+    contextLines: number;
+    batchSize: number;
+}
+
+interface RawAiResponse {
+    validNodeIds?: string[];
+    invalidNodeIds?: Array<string | { id?: string; reason?: string }>;
+    inferredNodes?: Array<{ name?: string; reason?: string }>;
+}
+
+interface DeepSeekChatCompletionResponse {
+    choices?: Array<{
+        message?: {
+            content?: string | null;
+        };
+    }>;
+}
+
+type AiProvider = 'deepseek' | 'xiaomi' | 'custom';
+
+const PROVIDER_DEFAULTS: Record<Exclude<AiProvider, 'custom'>, { endpoint: string; model: string; label: string }> = {
+    deepseek: {
+        endpoint: 'https://api.deepseek.com',
+        model: 'deepseek-v4-pro',
+        label: 'DeepSeek',
+    },
+    xiaomi: {
+        endpoint: 'https://api.xiaomimimo.com/v1',
+        model: 'mimo-v2.5-pro',
+        label: 'Xiaomi MiMo',
+    },
+};
+
+const DEEPSEEK_API_KEY_SECRET = 'cppNavigator.deepSeekApiKey';
+const XIAOMI_API_KEY_SECRET = 'cppNavigator.xiaomiApiKey';
+
+export class AiReviewService {
+    constructor(private readonly secrets?: vscode.SecretStorage) {}
+
+    isEnabled(): boolean {
+        return this.getBaseConfig().enabled;
+    }
+
+    getBatchSize(): number {
+        return this.getBaseConfig().batchSize;
+    }
+
+    async hasApiKey(provider = this.getBaseConfig().provider): Promise<boolean> {
+        return (await this.resolveApiKey(provider)).length > 0;
+    }
+
+    async storeApiKey(apiKey: string, provider = this.getBaseConfig().provider): Promise<void> {
+        if (!this.secrets) return;
+        await this.secrets.store(getApiKeySecret(provider), apiKey);
+    }
+
+    async clearApiKey(provider = this.getBaseConfig().provider): Promise<void> {
+        if (!this.secrets) return;
+        await this.secrets.delete(getApiKeySecret(provider));
+    }
+
+    async reviewCandidates(
+        targetSymbol: string,
+        direction: CallDirection,
+        candidates: SymbolEntry[],
+        index: SymbolIndex,
+        activeConfigs: string[]
+    ): Promise<AiReviewResult> {
+        const cfg = await this.getConfig();
+        if (!cfg.enabled) {
+            throw new Error('AI review is disabled. Enable cppNavigator.ai.enabled first.');
+        }
+        if (!cfg.apiKey) {
+            throw new Error(`${getProviderLabel(cfg.provider)} API key is missing. Run the matching configure API key command or set ${getProviderEnvHint(cfg.provider)}.`);
+        }
+
+        const targetSignatures = await this.collectTargetSignatures(targetSymbol, index, cfg.contextLines);
+        const reviewed: AiReviewDecision[] = [];
+        const inferredSymbols: AiReviewResult['inferredSymbols'] = [];
+
+        for (let i = 0; i < candidates.length; i += cfg.batchSize) {
+            const batch = candidates.slice(i, i + cfg.batchSize);
+            const request: AiReviewRequest = {
+                targetSymbol,
+                direction,
+                activeConfigs,
+                targetSignatures,
+                candidates: await Promise.all(batch.map(entry => this.toCandidate(direction, entry, cfg.contextLines))),
+            };
+
+            const result = await this.askModel(request, cfg);
+            reviewed.push(...result.decisions);
+            inferredSymbols.push(...result.inferredSymbols);
+        }
+
+        return { decisions: reviewed, inferredSymbols };
+    }
+
+    private getBaseConfig(): Omit<AiReviewRuntimeConfig, 'apiKey'> {
+        const cfg = vscode.workspace.getConfiguration('cppNavigator.ai');
+        const provider = normalizeProvider(cfg.get<string>('provider', 'deepseek'));
+        return {
+            enabled: cfg.get<boolean>('enabled', false),
+            provider,
+            endpoint: stripTrailingSlash(resolveProviderDefaultedSetting(cfg, 'endpoint', provider)),
+            model: resolveProviderDefaultedSetting(cfg, 'model', provider),
+            timeoutMs: Math.max(1000, cfg.get<number>('timeoutMs', 45000)),
+            contextLines: clamp(cfg.get<number>('contextLines', 8), 3, 30),
+            batchSize: clamp(cfg.get<number>('batchSize', 30), 1, 50),
+        };
+    }
+
+    private async getConfig(): Promise<AiReviewRuntimeConfig> {
+        const base = this.getBaseConfig();
+        return {
+            ...base,
+            apiKey: await this.resolveApiKey(base.provider),
+        };
+    }
+
+    private async resolveApiKey(provider: AiProvider): Promise<string> {
+        const stored = await this.secrets?.get(getApiKeySecret(provider));
+        if (stored) return stored;
+
+        const cfg = vscode.workspace.getConfiguration('cppNavigator.ai');
+        const configured = provider === 'xiaomi'
+            ? cfg.get<string>('xiaomiApiKey', '')
+            : cfg.get<string>('apiKey', '');
+        if (configured) return configured;
+
+        switch (provider) {
+            case 'xiaomi':
+                return process.env.MIMO_API_KEY || process.env.XIAOMI_API_KEY || '';
+            case 'custom':
+                return process.env.CPP_NAVIGATOR_AI_API_KEY || process.env.DEEPSEEK_API_KEY || '';
+            default:
+                return process.env.DEEPSEEK_API_KEY || '';
+        }
+    }
+
+    private async collectTargetSignatures(symbol: string, index: SymbolIndex, contextLines: number): Promise<string[]> {
+        const defs = index.getDefinitions(symbol).slice(0, 5);
+        const signatures = await Promise.all(defs.map(async def => {
+            const snippet = await readSnippet(def.uri, def.line, Math.min(contextLines, 8));
+            return `${vscode.workspace.asRelativePath(vscode.Uri.parse(def.uri))}:${def.line + 1}\n${snippet}`;
+        }));
+        return signatures.filter(Boolean);
+    }
+
+    private async toCandidate(direction: CallDirection, entry: SymbolEntry, contextLines: number): Promise<AiReviewCandidate> {
+        return {
+            id: makeAiNodeId(direction, entry),
+            symbol: entry.name,
+            qualifiedName: entry.qualifiedName,
+            uri: entry.uri,
+            line: entry.line,
+            character: entry.character,
+            snippet: await readSnippet(entry.uri, entry.line, contextLines),
+            ifdefStack: entry.ifdefStack,
+        };
+    }
+
+    private async askModel(request: AiReviewRequest, cfg: AiReviewRuntimeConfig): Promise<AiReviewResult> {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
+
+        try {
+            const response = await fetch(toChatCompletionsUrl(cfg.endpoint), {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${cfg.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: cfg.model,
+                    stream: false,
+                    temperature: 0,
+                    thinking: { type: 'disabled' },
+                    response_format: { type: 'json_object' },
+                    messages: [
+                        {
+                            role: 'system',
+                            content: 'You are a precise C/C++ RTOS call-tree review agent. Return JSON only.',
+                        },
+                        {
+                            role: 'user',
+                            content: buildReviewPrompt(request),
+                        },
+                    ],
+                }),
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                throw new Error(`${getProviderLabel(cfg.provider)} returned HTTP ${response.status}`);
+            }
+
+            const payload = await response.json() as DeepSeekChatCompletionResponse;
+            const content = payload.choices?.[0]?.message?.content ?? '';
+            return normalizeResponse(content);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+}
+
+export function makeAiNodeId(direction: CallDirection, entry: Pick<SymbolEntry, 'uri' | 'line' | 'name'>): string {
+    return `${direction}:${entry.uri}:${entry.line}:${entry.name}`;
+}
+
+function buildReviewPrompt(request: AiReviewRequest): string {
+    return [
+        'You are a precise C/C++ RTOS call-tree review agent.',
+        'A lexical engine has recalled candidate call-tree nodes. Review whether each candidate really belongs to the requested call edge.',
+        '',
+        'Decision criteria:',
+        '- Scope and namespace: reject same-name functions from unrelated files, classes, or static-local scopes.',
+        '- Argument shape: compare call-site arguments with the target function signature when available.',
+        '- Preprocessor context: reject candidates guarded by inactive macros when activeConfigs indicates the branch is inactive.',
+        '- Function pointer/callback hints: mention inferred callback targets only when the snippet clearly registers a function pointer.',
+        '',
+        'Return JSON only with this schema:',
+        '{"validNodeIds":["id"],"invalidNodeIds":[{"id":"id","reason":"short reason"}],"inferredNodes":[{"name":"symbol","reason":"short reason"}]}',
+        '',
+        `targetSymbol: ${request.targetSymbol}`,
+        `direction: ${request.direction}`,
+        `activeConfigs: ${JSON.stringify(request.activeConfigs)}`,
+        `targetSignatures: ${JSON.stringify(request.targetSignatures)}`,
+        `candidates: ${JSON.stringify(request.candidates)}`,
+    ].join('\n');
+}
+
+function normalizeResponse(text: string): AiReviewResult {
+    const parsed = parseJsonObject(text);
+    const raw = parsed as RawAiResponse;
+    const decisions: AiReviewDecision[] = [];
+
+    for (const id of raw.validNodeIds ?? []) {
+        if (typeof id === 'string' && id) {
+            decisions.push({ id, status: 'valid' });
+        }
+    }
+
+    for (const item of raw.invalidNodeIds ?? []) {
+        if (typeof item === 'string') {
+            decisions.push({ id: item, status: 'invalid' });
+        } else if (item.id) {
+            decisions.push({ id: item.id, status: 'invalid', reason: item.reason });
+        }
+    }
+
+    const inferredSymbols = (raw.inferredNodes ?? [])
+        .filter((node): node is { name: string; reason?: string } => typeof node.name === 'string' && node.name.length > 0)
+        .map(node => ({ name: node.name, reason: node.reason }));
+
+    return { decisions, inferredSymbols };
+}
+
+function parseJsonObject(text: string): unknown {
+    const trimmed = text.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        const start = trimmed.indexOf('{');
+        const end = trimmed.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return JSON.parse(trimmed.slice(start, end + 1));
+        }
+        throw new Error('AI review did not return valid JSON.');
+    }
+}
+
+async function readSnippet(uriText: string, line: number, radius: number): Promise<string> {
+    try {
+        const uri = vscode.Uri.parse(uriText);
+        const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+        const lines = text.split(/\r?\n/);
+        const start = Math.max(0, line - radius);
+        const end = Math.min(lines.length, line + radius + 1);
+        return lines
+            .slice(start, end)
+            .map((value, idx) => `${start + idx + 1}: ${value}`)
+            .join('\n');
+    } catch {
+        return '';
+    }
+}
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
+function stripTrailingSlash(value: string): string {
+    return value.replace(/\/+$/, '');
+}
+
+function normalizeProvider(value: string): AiProvider {
+    if (value === 'xiaomi' || value === 'custom') return value;
+    return 'deepseek';
+}
+
+function resolveProviderDefaultedSetting(
+    cfg: vscode.WorkspaceConfiguration,
+    key: 'endpoint' | 'model',
+    provider: AiProvider
+): string {
+    const configured = getConfiguredValue<string>(cfg, key);
+    if (configured) return configured;
+    if (provider === 'custom') return cfg.get<string>(key, PROVIDER_DEFAULTS.deepseek[key]);
+    return PROVIDER_DEFAULTS[provider][key];
+}
+
+function getConfiguredValue<T>(cfg: vscode.WorkspaceConfiguration, key: string): T | undefined {
+    const inspected = cfg.inspect<T>(key);
+    return inspected?.workspaceFolderValue
+        ?? inspected?.workspaceValue
+        ?? inspected?.globalValue
+        ?? inspected?.defaultLanguageValue
+        ?? inspected?.workspaceFolderLanguageValue
+        ?? inspected?.workspaceLanguageValue
+        ?? inspected?.globalLanguageValue;
+}
+
+function getApiKeySecret(provider: AiProvider): string {
+    return provider === 'xiaomi' ? XIAOMI_API_KEY_SECRET : DEEPSEEK_API_KEY_SECRET;
+}
+
+function getProviderLabel(provider: AiProvider): string {
+    if (provider === 'custom') return 'AI provider';
+    return PROVIDER_DEFAULTS[provider].label;
+}
+
+function getProviderEnvHint(provider: AiProvider): string {
+    switch (provider) {
+        case 'xiaomi':
+            return 'MIMO_API_KEY or XIAOMI_API_KEY';
+        case 'custom':
+            return 'CPP_NAVIGATOR_AI_API_KEY';
+        default:
+            return 'DEEPSEEK_API_KEY';
+    }
+}
+
+function toChatCompletionsUrl(endpoint: string): string {
+    return endpoint.endsWith('/chat/completions')
+        ? endpoint
+        : `${endpoint}/chat/completions`;
+}

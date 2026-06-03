@@ -4,6 +4,7 @@
   "displayName": "C/C++ Navigator",
   "description": "Fast C/C++ code navigation using cscope/ctags or the built-in indexer",
   "version": "1.0.0",
+  "icon": "images/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/Kalaser/cpp-navigator.git"
@@ -17,8 +18,7 @@
   ],
   "activationEvents": [
     "onLanguage:c",
-    "onLanguage:cpp",
-    "onView:cppNavigator.historyView"
+    "onLanguage:cpp"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -55,13 +55,69 @@
       {
         "command": "cppNavigator.searchSelectedText",
         "title": "C/C++ Navigator: Search Selected Text"
+      },
+      {
+        "command": "cppNavigator.showCallHierarchy",
+        "title": "C/C++ Navigator: Show Call Hierarchy"
+      },
+      {
+        "command": "cppNavigator.showCallTreeGraph",
+        "title": "C/C++ Navigator: Show Call Tree Graph"
+      },
+      {
+        "command": "cppNavigator.markCaller",
+        "title": "C/C++ Navigator: Mark as Caller"
+      },
+      {
+        "command": "cppNavigator.linkToDefinition",
+        "title": "C/C++ Navigator: Link to Definition"
+      },
+      {
+        "command": "cppNavigator.clearCallTree",
+        "title": "C/C++ Navigator: Clear Call Tree"
+      },
+      {
+        "command": "cppNavigator.aiCleanCallTree",
+        "title": "C/C++ Navigator: AI Clean Call Tree",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "cppNavigator.configureDeepSeekApiKey",
+        "title": "C/C++ Navigator: Configure DeepSeek API Key"
+      },
+      {
+        "command": "cppNavigator.configureXiaomiApiKey",
+        "title": "C/C++ Navigator: Configure Xiaomi MiMo API Key"
+      },
+      {
+        "command": "cppNavigator.previewHistoryItem",
+        "title": "C/C++ Navigator: Preview History Item"
+      },
+      {
+        "command": "cppNavigator.openCallTreeNode",
+        "title": "Open Call Tree Node"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cppNavigator.callTreePanel",
+          "title": "C/C++ Call Tree",
+          "icon": "images/call-tree-icon.svg"
+        }
+      ]
+    },
     "views": {
       "explorer": [
         {
           "id": "cppNavigator.historyView",
           "name": "C/C++ Browse History"
+        }
+      ],
+      "cppNavigator.callTreePanel": [
+        {
+          "id": "cppNavigator.callTreeView",
+          "name": "Call Tree"
         }
       ]
     },
@@ -71,6 +127,23 @@
           "command": "cppNavigator.clearHistory",
           "when": "view == cppNavigator.historyView",
           "group": "navigation"
+        },
+        {
+          "command": "cppNavigator.clearCallTree",
+          "when": "view == cppNavigator.callTreeView",
+          "group": "navigation"
+        },
+        {
+          "command": "cppNavigator.aiCleanCallTree",
+          "when": "view == cppNavigator.callTreeView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cppNavigator.previewHistoryItem",
+          "when": "view == cppNavigator.historyView && viewItem == cppNavigatorHistoryItem",
+          "group": "inline"
         }
       ],
       "editor/context": [
@@ -83,6 +156,26 @@
           "command": "cppNavigator.searchSelectedText",
           "when": "editorLangId == c || editorLangId == cpp",
           "group": "navigation@2"
+        },
+        {
+          "command": "cppNavigator.showCallHierarchy",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "navigation@3"
+        },
+        {
+          "command": "cppNavigator.showCallTreeGraph",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "navigation@4"
+        },
+        {
+          "command": "cppNavigator.markCaller",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "cppNav@1"
+        },
+        {
+          "command": "cppNavigator.linkToDefinition",
+          "when": "editorLangId == c || editorLangId == cpp",
+          "group": "cppNav@2"
         }
       ]
     },
@@ -138,6 +231,61 @@
             "**/CMakeFiles/**"
           ],
           "description": "Glob patterns excluded from indexing."
+        },
+        "cppNavigator.ai.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable AI-assisted call-tree review. Candidate snippets and nearby source context are sent to the configured provider endpoint."
+        },
+        "cppNavigator.ai.provider": {
+          "type": "string",
+          "enum": [
+            "deepseek",
+            "xiaomi",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "Use DeepSeek's OpenAI-compatible Chat Completions endpoint.",
+            "Use Xiaomi MiMo's OpenAI-compatible Chat Completions endpoint.",
+            "Use a custom OpenAI-compatible Chat Completions endpoint."
+          ],
+          "default": "deepseek",
+          "description": "AI provider used for call-tree review. Xiaomi selects MiMo defaults unless endpoint/model are explicitly configured."
+        },
+        "cppNavigator.ai.endpoint": {
+          "type": "string",
+          "default": "https://api.deepseek.com",
+          "description": "AI API base URL used for call-tree review. Xiaomi default is https://api.xiaomimimo.com/v1 when this setting is not explicitly configured. A full /chat/completions URL is also accepted."
+        },
+        "cppNavigator.ai.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional DeepSeek/custom API key used for AI call-tree review. Prefer the Configure DeepSeek API Key command, which stores the key in VS Code SecretStorage. If no stored secret exists, this setting, DEEPSEEK_API_KEY, or CPP_NAVIGATOR_AI_API_KEY is used."
+        },
+        "cppNavigator.ai.xiaomiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Xiaomi MiMo API key used when cppNavigator.ai.provider is xiaomi. Prefer the Configure Xiaomi MiMo API Key command, which stores the key in VS Code SecretStorage. If no stored secret exists, this setting, MIMO_API_KEY, or XIAOMI_API_KEY is used."
+        },
+        "cppNavigator.ai.model": {
+          "type": "string",
+          "default": "deepseek-v4-pro",
+          "description": "Model name used for AI call-tree review. Xiaomi default is mimo-v2.5-pro when this setting is not explicitly configured."
+        },
+        "cppNavigator.ai.timeoutMs": {
+          "type": "number",
+          "default": 45000,
+          "description": "Timeout in milliseconds for one AI review batch."
+        },
+        "cppNavigator.ai.contextLines": {
+          "type": "number",
+          "default": 8,
+          "description": "Number of source lines captured before and after each candidate call site."
+        },
+        "cppNavigator.ai.batchSize": {
+          "type": "number",
+          "default": 30,
+          "description": "Maximum candidate nodes sent in one AI review request."
         }
       }
     }

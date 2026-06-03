@@ -7,7 +7,22 @@ import { SymbolEntry } from './types';
 type ProgressReporter = (message: string) => void;
 
 const SOURCE_EXTENSIONS = new Set(['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx']);
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'build', 'out', 'CMakeFiles']);
+
+// 方案一：源头隔离脏代码目录（针对 LVGL/嵌入式/大型 C++ 工程优化）
+const SKIP_DIRS = new Set([
+    // 版本控制 & 构建产物
+    '.git', '.svn', '.hg', 'node_modules', 'build', 'out', 'CMakeFiles', '__pycache__',
+    // 测试 & 示例（Cscope 盲区的主要来源）
+    'tests', 'test', 'examples', 'example', 'demos', 'demo', 'benchmark', 'benchmarks',
+    'unity',                          // Unity 单元测试框架（LVGL tests 依赖）
+    // 文档 & 资源
+    'docs', 'doc', 'scripts', 'tools',
+    // 常见第三方干扰库
+    'LodePNG', 'lodepng',             // 图片解码库（含自带 main）
+    'lv_fs_if',                       // LVGL 文件系统接口
+    'lv_lib_png', 'lv_lib_gif',      // LVGL 第三方库
+    'lv_demos',                       // LVGL 官方 demo（含 main）
+]);
 
 export class CscopeBackend {
     private cscopeDbPath: string;

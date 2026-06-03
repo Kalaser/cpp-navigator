@@ -8,7 +8,16 @@ import {
 } from './providers';
 import { detectProject } from './projectDetector';
 import { CscopeBackend } from './cscopeBackend';
-import { CallHierarchyProvider } from './callHierarchyProvider';
+import { CallHierarchyProvider, clearCallHierarchyCache } from './callHierarchyProvider';
+import { CallTreeManager } from './callTreeManager';
+import { ManualLinkManager } from './manualLinkManager';
+import {
+    setTreeManager, setManualLinkManager, setSymbolIndex,
+    setAiReviewService, setActiveConfigProvider,
+    registerShowCallHierarchy, registerShowCallTreeGraph,
+    registerMarkCaller, registerClearCallTree, registerAiCleanCallTree
+} from './commands/callTreeCommands';
+import { AiReviewService } from './services/aiReviewService';
 import { IndexDatabase } from './db';
 import { BackendType, SymbolEntry } from './types';
 import { HistoryManager } from './historyManager';
@@ -53,7 +62,7 @@ async function resolveBackend(
     return { useCscope: false, useBuiltin: true };
 }
 
-// ── 增量索引构建（核心：mtime 比对，只扫描变化文件）─────────
+// ── 增量索引构建 ──────────────────────────────────────────────
 async function buildIndexIncremental(showProgress = true): Promise<void> {
     if (buildLock) { await buildLock; return; }
 
@@ -83,18 +92,13 @@ async function buildIndexIncremental(showProgress = true): Promise<void> {
                     const uri   = file.toString();
                     const mtime = Math.floor(fs.statSync(file.fsPath).mtimeMs);
 
-                    // DB 有记录且 mtime 未变 → 跳过
                     if (db.isReady && !db.needsReindex(uri, mtime)) {
                         skipped++;
                         return;
                     }
 
                     const entries = await scanFile(file.fsPath, activeConfigs);
-
-                    // 写入 DB（持久化）
                     db.updateFile(uri, mtime, entries);
-
-                    // 更新内存 Map
                     index.removeFile(uri);
                     index.addEntries(entries);
                     scanned++;
@@ -106,9 +110,10 @@ async function buildIndexIncremental(showProgress = true): Promise<void> {
             }
         }
 
-        const { symbols, files: fileCount } = db.isReady ? db.stats() : { symbols: index.size, files: 0 };
+        clearCallHierarchyCache();
+        const stats = db.isReady ? db.stats() : { symbols: index.size, files: 0 };
         vscode.window.setStatusBarMessage(
-            `$(symbol-function) CppNav: ${symbols} symbols, ${scanned} updated`, 4000
+            `$(symbol-function) CppNav: ${stats.symbols} symbols, ${scanned} updated`, 4000
         );
     };
 
@@ -123,7 +128,6 @@ async function buildIndexIncremental(showProgress = true): Promise<void> {
     finally { buildLock = null; }
 }
 
-// ── 构建 cscope 数据库 ────────────────────────────────────────
 async function buildCscopeDb(): Promise<void> {
     if (!cscopeBackend) {
         vscode.window.showWarningMessage('cscope not available. Install cscope and ctags first.');
@@ -139,6 +143,7 @@ async function buildCscopeDb(): Promise<void> {
     vscode.window.showInformationMessage('cscope/ctags database built!');
 }
 
+// ── 命令实现（薄封装）─────────────────────────────────────────
 async function searchSymbolCommand(): Promise<void> {
     const query = await vscode.window.showInputBox({
         title: 'C/C++ Navigator: Search Symbol',
@@ -161,16 +166,13 @@ async function searchSymbolCommand(): Promise<void> {
 async function previewDefinitionCommand(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
-
     const word = getWord(editor.document, editor.selection.active);
     if (!word) return;
-
     const definitions = index.getDefinitions(word);
     if (definitions.length === 0) {
         vscode.window.showInformationMessage(`No definition found for ${word}`);
         return;
     }
-
     historyManager?.record('definition', word, definitions);
     await showPreviewPanel(word, definitions[0]);
 }
@@ -178,17 +180,11 @@ async function previewDefinitionCommand(): Promise<void> {
 async function searchSelectedTextCommand(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor) return;
-
     const selected = editor.document.getText(editor.selection).trim();
     const word = selected || getWord(editor.document, editor.selection.active);
     if (!word) return;
-
     await vscode.commands.executeCommand('workbench.action.findInFiles', {
-        query: word,
-        triggerSearch: true,
-        isRegex: false,
-        isCaseSensitive: true,
-        matchWholeWord: true,
+        query: word, triggerSearch: true, isRegex: false, isCaseSensitive: true, matchWholeWord: true,
     });
 }
 
@@ -209,35 +205,122 @@ async function showPreviewPanel(symbol: string, entry: SymbolEntry): Promise<voi
     const end = Math.min(lines.length, entry.line + 40);
     const code = lines.slice(start, end).join('\n');
     const panel = vscode.window.createWebviewPanel(
-        'cppNavigator.preview',
-        `Preview: ${symbol}`,
-        vscode.ViewColumn.Beside,
-        { enableScripts: false }
+        'cppNavigator.preview', `Preview: ${symbol}`,
+        vscode.ViewColumn.Beside, { enableScripts: false }
     );
-
-    panel.webview.html = `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { font-family: var(--vscode-editor-font-family); color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); padding: 12px; }
-    .meta { color: var(--vscode-descriptionForeground); margin-bottom: 12px; font-family: var(--vscode-font-family); }
-    pre { white-space: pre-wrap; margin: 0; line-height: 1.45; }
-  </style>
-</head>
-<body>
-  <div class="meta">${escapeHtml(vscode.workspace.asRelativePath(uri))}:${entry.line + 1}</div>
-  <pre>${escapeHtml(code)}</pre>
-</body>
-</html>`;
+    panel.webview.html = `<!doctype html><html><head><meta charset="utf-8"><style>
+        body{font-family:var(--vscode-editor-font-family);color:var(--vscode-editor-foreground);
+             background:var(--vscode-editor-background);padding:12px;}
+        .meta{color:var(--vscode-descriptionForeground);margin-bottom:12px;}
+        pre{white-space:pre-wrap;margin:0;line-height:1.45;}
+    </style></head><body>
+        <div class="meta">${escapeHtml(vscode.workspace.asRelativePath(uri))}:${entry.line + 1}</div>
+        <pre>${escapeHtml(code)}</pre>
+    </body></html>`;
 }
 
 function escapeHtml(value: string): string {
-    return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+    return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+const DEEPSEEK_API_KEY_PROMPTED = 'cppNavigator.deepSeekApiKeyPrompted';
+const XIAOMI_API_KEY_PROMPTED = 'cppNavigator.xiaomiApiKeyPrompted';
+
+type ConfigurableAiProvider = 'deepseek' | 'xiaomi';
+
+const AI_PROVIDER_CONFIG: Record<ConfigurableAiProvider, {
+    title: string;
+    prompt: string;
+    placeHolder: string;
+    label: string;
+    promptedKey: string;
+}> = {
+    deepseek: {
+        title: 'C/C++ Navigator: DeepSeek API Key',
+        prompt: 'Enter your DeepSeek API key. Leave empty to clear the stored key.',
+        placeHolder: 'sk-...',
+        label: 'DeepSeek',
+        promptedKey: DEEPSEEK_API_KEY_PROMPTED,
+    },
+    xiaomi: {
+        title: 'C/C++ Navigator: Xiaomi MiMo API Key',
+        prompt: 'Enter your Xiaomi MiMo API key. Leave empty to clear the stored key.',
+        placeHolder: 'mim-...',
+        label: 'Xiaomi MiMo',
+        promptedKey: XIAOMI_API_KEY_PROMPTED,
+    },
+};
+
+async function configureAiApiKey(
+    aiReviewService: AiReviewService,
+    context: vscode.ExtensionContext | undefined,
+    provider: ConfigurableAiProvider
+): Promise<void> {
+    const providerConfig = AI_PROVIDER_CONFIG[provider];
+    const apiKey = await vscode.window.showInputBox({
+        title: providerConfig.title,
+        prompt: providerConfig.prompt,
+        placeHolder: providerConfig.placeHolder,
+        password: true,
+        ignoreFocusOut: true,
+    });
+
+    if (apiKey === undefined) return;
+
+    const trimmed = apiKey.trim();
+    if (!trimmed) {
+        await aiReviewService.clearApiKey(provider);
+        vscode.window.showInformationMessage(`${providerConfig.label} API key cleared. Non-AI navigation is unaffected.`);
+        await context?.globalState.update(providerConfig.promptedKey, true);
+        return;
+    }
+
+    await aiReviewService.storeApiKey(trimmed, provider);
+    await vscode.workspace
+        .getConfiguration('cppNavigator.ai')
+        .update('provider', provider, vscode.ConfigurationTarget.Global);
+    await vscode.workspace
+        .getConfiguration('cppNavigator.ai')
+        .update('enabled', true, vscode.ConfigurationTarget.Global);
+    await context?.globalState.update(providerConfig.promptedKey, true);
+    vscode.window.showInformationMessage(`${providerConfig.label} API key saved. AI call-tree review is enabled.`);
+}
+
+async function configureDeepSeekApiKey(
+    aiReviewService: AiReviewService,
+    context?: vscode.ExtensionContext
+): Promise<void> {
+    await configureAiApiKey(aiReviewService, context, 'deepseek');
+}
+
+async function configureXiaomiApiKey(
+    aiReviewService: AiReviewService,
+    context?: vscode.ExtensionContext
+): Promise<void> {
+    await configureAiApiKey(aiReviewService, context, 'xiaomi');
+}
+
+async function maybePromptForDeepSeekApiKey(
+    context: vscode.ExtensionContext,
+    aiReviewService: AiReviewService
+): Promise<void> {
+    const provider = vscode.workspace.getConfiguration('cppNavigator.ai').get<string>('provider', 'deepseek');
+    if (provider !== 'deepseek') return;
+    if (await aiReviewService.hasApiKey('deepseek')) return;
+    if (context.globalState.get<boolean>(DEEPSEEK_API_KEY_PROMPTED, false)) return;
+
+    const choice = await vscode.window.showInformationMessage(
+        'C/C++ Navigator can use DeepSeek for AI call-tree cleanup. Configure an API key now?',
+        'Configure',
+        'Skip'
+    );
+
+    if (choice === 'Configure') {
+        await configureDeepSeekApiKey(aiReviewService, context);
+        return;
+    }
+
+    await context.globalState.update(DEEPSEEK_API_KEY_PROMPTED, true);
 }
 
 // ── 插件激活入口 ─────────────────────────────────────────────
@@ -246,12 +329,12 @@ export async function activate(context: vscode.ExtensionContext) {
     const rootPath  = wsFolders[0]?.uri.fsPath ?? '';
     const cfg       = getConfig();
 
-    // 1. 初始化 DB（使用 VSCode 提供的持久化存储路径）
+    // 1. 初始化 DB
     db = new IndexDatabase(context.globalStorageUri.fsPath);
     await db.open();
     historyManager = new HistoryManager(context);
 
-    // 2. 从 DB 热加载内存索引（毫秒级，不阻塞激活）
+    // 2. 从 DB 热加载内存索引
     if (db.isReady) {
         const cached = db.loadAll();
         index.addEntries(cached);
@@ -259,19 +342,41 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.setStatusBarMessage(`$(symbol-function) CppNav: ${symbols} symbols loaded`, 3000);
     }
 
-    // 3. 后台增量扫描（只处理变化的文件）
+    // 3. 后台增量扫描
     void buildIndexIncremental(false);
 
-    // 4. 初始化 cscope 后端
+    // 4. 初始化后端
     cscopeBackend = new CscopeBackend(rootPath, cfg.cscopeCmd, cfg.ctagsCmd);
-    const { useCscope, useBuiltin } = await resolveBackend(rootPath, cfg);
+    const { useCscope } = await resolveBackend(rootPath, cfg);
+    const effectiveCscope = useCscope ? cscopeBackend : null;
+
+    // 5. 初始化 Manual Link Manager (Phase 2)
+    const manualLinkManager = new ManualLinkManager(context);
+
+    // 6. 初始化 Call Tree Manager (Phase 1 + 3)
+    const callTreeManager = new CallTreeManager();
+    callTreeManager.configure(effectiveCscope, index, manualLinkManager);
+
+    // 7. 注入依赖到命令层
+    const aiReviewService = new AiReviewService(context.secrets);
+    setTreeManager(callTreeManager);
+    setManualLinkManager(manualLinkManager);
+    setSymbolIndex(index);
+    setAiReviewService(aiReviewService);
+    setActiveConfigProvider(() => Array.from(getConfig().activeConfigs));
 
     const selector: vscode.DocumentSelector = [
         { scheme: 'file', language: 'c' },
         { scheme: 'file', language: 'cpp' },
     ];
 
-    // 5. 注册所有 Provider
+    // 8. 注册 TreeView
+    context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('cppNavigator.historyView', historyManager),
+        vscode.window.registerTreeDataProvider('cppNavigator.callTreeView', callTreeManager),
+    );
+
+    // 9. 注册 Provider
     context.subscriptions.push(
         vscode.languages.registerDefinitionProvider(selector,
             useCscope && cscopeBackend
@@ -284,56 +389,71 @@ export async function activate(context: vscode.ExtensionContext) {
                 ? new CscopeReferenceProvider(cscopeBackend, index)
                 : new ReferenceProvider(index, historyManager)
         ),
-        vscode.languages.registerDocumentSymbolProvider(selector,  new DocumentSymbolProvider(index)),
+        vscode.languages.registerDocumentSymbolProvider(selector, new DocumentSymbolProvider(index)),
         vscode.languages.registerWorkspaceSymbolProvider(new WorkspaceSymbolProvider(index)),
         vscode.languages.registerHoverProvider(selector, new HoverProvider(index)),
-        ...(useCscope && cscopeBackend ? [
-            vscode.languages.registerCallHierarchyProvider(selector,
-                new CallHierarchyProvider(cscopeBackend, index)
-            )
-        ] : [])
+        vscode.languages.registerCallHierarchyProvider(selector,
+            new CallHierarchyProvider(effectiveCscope, index)
+        )
     );
 
-    // 6. 命令注册
+    // 10. 命令注册
     context.subscriptions.push(
-        vscode.window.registerTreeDataProvider('cppNavigator.historyView', historyManager),
-        vscode.commands.registerCommand('cppNavigator.rebuildIndex',
-            () => buildIndexIncremental(true)
-        ),
-        vscode.commands.registerCommand('cppNavigator.buildCscopeDb',
-            () => buildCscopeDb()
-        ),
+        vscode.commands.registerCommand('cppNavigator.rebuildIndex', () => buildIndexIncremental(true)),
+        vscode.commands.registerCommand('cppNavigator.buildCscopeDb', () => buildCscopeDb()),
         vscode.commands.registerCommand('cppNavigator.rebuildAll', async () => {
             await buildCscopeDb();
             await buildIndexIncremental(true);
         }),
         vscode.commands.registerCommand('cppNavigator.showStats', () => {
-            const { symbols, files } = db.isReady
-                ? db.stats()
-                : { symbols: index.size, files: 0 };
+            const stats = db.isReady ? db.stats() : { symbols: index.size, files: 0 };
             vscode.window.showInformationMessage(
-                `C/C++ Navigator: ${symbols} symbols across ${files} files` +
+                `C/C++ Navigator: ${stats.symbols} symbols across ${stats.files} files` +
                 (useCscope ? ' | cscope backend active' : ' | builtin backend')
             );
         }),
-        vscode.commands.registerCommand('cppNavigator.clearHistory',
-            () => historyManager.clear()
+        vscode.commands.registerCommand('cppNavigator.clearHistory', () => historyManager.clear()),
+        vscode.commands.registerCommand('cppNavigator.openHistoryItem', (item) => historyManager.open(item)),
+        vscode.commands.registerCommand('cppNavigator.previewHistoryItem', (item) => historyManager.preview(item)),
+        // 调用树节点点击：以 preview 模式打开文件，保持焦点在侧边栏
+        vscode.commands.registerCommand('cppNavigator.openCallTreeNode',
+            async (uri: string, line: number, char: number, len: number) => {
+                try {
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+                    const editor = await vscode.window.showTextDocument(doc, {
+                        viewColumn: vscode.ViewColumn.Active,
+                        preserveFocus: true,   // 关键：不抢走侧边栏焦点
+                        preview: true,         // preview 模式：复用 tab
+                    });
+                    const pos = new vscode.Position(line, char);
+                    editor.selection = new vscode.Selection(pos, pos);
+                    editor.revealRange(
+                        new vscode.Range(pos, pos),
+                        vscode.TextEditorRevealType.InCenter
+                    );
+                } catch { /* ignore */ }
+            }
         ),
-        vscode.commands.registerCommand('cppNavigator.openHistoryItem',
-            item => historyManager.open(item)
+        vscode.commands.registerCommand('cppNavigator.searchSymbol', () => searchSymbolCommand()),
+        vscode.commands.registerCommand('cppNavigator.previewDefinition', () => previewDefinitionCommand()),
+        vscode.commands.registerCommand('cppNavigator.searchSelectedText', () => searchSelectedTextCommand()),
+        vscode.commands.registerCommand('cppNavigator.configureDeepSeekApiKey',
+            () => configureDeepSeekApiKey(aiReviewService, context)
         ),
-        vscode.commands.registerCommand('cppNavigator.searchSymbol',
-            () => searchSymbolCommand()
+        vscode.commands.registerCommand('cppNavigator.configureXiaomiApiKey',
+            () => configureXiaomiApiKey(aiReviewService, context)
         ),
-        vscode.commands.registerCommand('cppNavigator.previewDefinition',
-            () => previewDefinitionCommand()
-        ),
-        vscode.commands.registerCommand('cppNavigator.searchSelectedText',
-            () => searchSelectedTextCommand()
-        )
     );
 
-    // 7. 文件保存 → 增量更新
+    // 11. Call Tree 命令 (commands/ 层)
+    registerShowCallHierarchy(context.subscriptions);
+    registerShowCallTreeGraph(context.subscriptions);
+    registerMarkCaller(context.subscriptions);
+    registerClearCallTree(context.subscriptions);
+    registerAiCleanCallTree(context.subscriptions);
+    void maybePromptForDeepSeekApiKey(context, aiReviewService);
+
+    // 12. 文件事件
     context.subscriptions.push(
         vscode.workspace.onDidSaveTextDocument(async doc => {
             if (!['c', 'cpp'].includes(doc.languageId)) return;
@@ -348,11 +468,11 @@ export async function activate(context: vscode.ExtensionContext) {
             db.updateFile(uri, mtime, entries);
             index.removeFile(uri);
             index.addEntries(entries);
+            clearCallHierarchyCache();
 
             if (useCscope && cscopeBackend) void cscopeBackend.buildCscope();
         }),
 
-        // 文件删除 → 清理索引
         vscode.workspace.onDidDeleteFiles(e => {
             for (const file of e.files) {
                 const uri = file.toString();
@@ -363,10 +483,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
         vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('cppNavigator')) buildIndexIncremental(false);
-        })
+        }),
     );
 
-    // 8. 状态栏
+    // 13. 状态栏
     const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBar.text    = `$(symbol-function) CppNav: ${useCscope ? 'cscope' : 'builtin'}`;
     statusBar.tooltip = useCscope
@@ -376,7 +496,7 @@ export async function activate(context: vscode.ExtensionContext) {
     statusBar.show();
     context.subscriptions.push(statusBar);
 
-    // 9. 插件停用时关闭 DB
+    // 14. 停用时关闭 DB
     context.subscriptions.push({ dispose: () => db.close() });
 }
 
@@ -391,15 +511,11 @@ class CscopeDefinitionProvider implements vscode.DefinitionProvider {
         const cs = await this.cscope.findDefinitions(word);
         if (cs.length > 0) {
             historyManager?.record('definition', word, cs);
-            return cs.map(e =>
-                new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character))
-            );
+            return cs.map(e => new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character)));
         }
         const entries = this.index.getDefinitions(word);
         historyManager?.record('definition', word, entries);
-        return entries.map(e =>
-            new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character))
-        );
+        return entries.map(e => new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character)));
     }
 }
 
@@ -412,15 +528,11 @@ class CscopeReferenceProvider implements vscode.ReferenceProvider {
         const cs = await this.cscope.findReferences(word);
         if (cs.length > 0) {
             historyManager?.record('reference', word, cs);
-            return cs.map(e =>
-                new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character))
-            );
+            return cs.map(e => new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character)));
         }
         const entries = this.index.getAllEntries(word);
         historyManager?.record('reference', word, entries);
-        return entries.map(e =>
-            new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character))
-        );
+        return entries.map(e => new vscode.Location(vscode.Uri.parse(e.uri), new vscode.Position(e.line, e.character)));
     }
 }
 

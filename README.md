@@ -17,14 +17,18 @@ C/C++ Navigator 是一个面向大型 C/C++ 代码库的 VS Code 导航插件。
 | 🔍 **多后端支持** | 自动检测 cscope 数据库，或仅用内置索引 |
 | 💾 **持久化存储** | 优先 SQLite 数据库，失败时自动降级 JSON 缓存 |
 | 📜 **浏览历史** | 自动记录跳转历史，支持 Tree View 回溯 |
+| 📊 **调用树可视化** | 侧边栏懒加载树 + ECharts Webview 全局调用关系图 |
+| ✨ **AI 调用树清理** | 支持 DeepSeek 与小米 MiMo API，辅助过滤调用树误报并提示回调线索 |
+| 🎨 **原生主题适配** | 全自动适配 Dark/Light/High Contrast 主题，零硬编码颜色 |
+| ⚡ **LRU 缓存** | 调用分析结果缓存，展开/收起节点无需重复计算 |
 | 🛠️ **灵活配置** | 支持额外源码根目录、排除模式、活跃宏定义 |
 
 ## 📋 功能清单
 
 ### 代码导航能力
 
-| 功能 | 快捷键 | 状态 | 说明 |
-|------|--------|------|------|
+| 功能 | 快捷键/入口 | 状态 | 说明 |
+|------|-------------|------|------|
 | **跳转定义** | `F12` / `Ctrl+Click` | ✅ | 支持函数、宏、结构体、类、变量 |
 | **跳转声明** | `Alt+F12` | ✅ | 跳转到头文件中的声明 |
 | **查找引用** | `Shift+F12` | ✅ | cscope 后端优先，内置模式扫描文本 |
@@ -32,7 +36,39 @@ C/C++ Navigator 是一个面向大型 C/C++ 代码库的 VS Code 导航插件。
 | **文件大纲** | `Ctrl+Shift+O` | ✅ | 当前文件的符号树 |
 | **Hover 提示** | 鼠标悬停 | ✅ | 显示定义位置和代码片段 |
 | **定义预览** | 右键菜单 | ✅ | 旁侧 Webview 预览定义 |
-| **调用层级** | - | ✅ | cscope 后端支持 Incoming/Outgoing calls |
+| **调用层级（原生）** | `Shift+Alt+H` / 右键 | ✅ | VS Code 原生 Peek Call Hierarchy 面板 |
+| **调用树可视化** | 右键 → Show Call Tree Graph | ✅ | 侧边栏懒加载树 + ECharts 关系图 |
+| **AI 清理调用树** | 调用树视图标题栏魔杖按钮 | ✅ | 使用 DeepSeek 或小米 MiMo 复核候选调用关系 |
+
+### 调用树功能
+
+| 功能 | 说明 |
+|------|------|
+| **侧边栏懒加载** | Explorer 中的 `C/C++ Call Tree` 视图，展开节点时按需查询，不预加载整棵树 |
+| **ECharts 可视化** | 水平展开的关系思维导图，caller（黄）/ callee（青）/ root（蓝）三色区分 |
+| **交互操作** | 点击节点跳转源码、滚动缩放、拖拽平移、Expand/Collapse All 按钮 |
+| **主题自动适配** | 检测 VS Code 主题类型（Light/Dark/HC），Webview 颜色实时跟随 |
+| **LRU 缓存** | 最多 500 条缓存，自动淘汰最旧条目，文件变更时自动清除 |
+| **AI 清理** | 将候选调用点及上下文发送到已配置的大模型，标记疑似误报并补充回调提示 |
+
+### AI 辅助调用树清理
+
+AI 清理是可选能力，默认关闭。开启后，插件会把候选调用树节点、目标函数签名和少量源码上下文发送到配置的 OpenAI-compatible Chat Completions 接口，让模型复核调用关系是否真实存在。
+
+当前内置 provider：
+
+| Provider | 默认 endpoint | 默认 model | API key 来源 |
+|------|------|------|------|
+| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-pro` | SecretStorage / `cppNavigator.ai.apiKey` / `DEEPSEEK_API_KEY` |
+| `xiaomi` | `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro` | SecretStorage / `cppNavigator.ai.xiaomiApiKey` / `MIMO_API_KEY` / `XIAOMI_API_KEY` |
+| `custom` | 使用 `endpoint` 配置 | 使用 `model` 配置 | `cppNavigator.ai.apiKey` / `CPP_NAVIGATOR_AI_API_KEY` |
+
+推荐通过命令面板保存密钥：
+
+1. `C/C++ Navigator: Configure DeepSeek API Key`
+2. `C/C++ Navigator: Configure Xiaomi MiMo API Key`
+
+这两个命令会把 key 存入 VS Code SecretStorage，并自动启用 `cppNavigator.ai.enabled`。配置小米 key 时还会自动把 `cppNavigator.ai.provider` 切到 `xiaomi`。
 
 ### 数据库构建
 
@@ -42,15 +78,6 @@ C/C++ Navigator 是一个面向大型 C/C++ 代码库的 VS Code 导航插件。
 | **cscope 数据库** | ✅ | 生成 `cscope.files` 和 `cscope.out` |
 | **ctags 数据库** | ✅ | 生成 `tags` 文件，作为 fallback |
 | **一键重建全部** | ✅ | 同时构建外部数据库和内置索引 |
-
-### 浏览历史
-
-| 功能 | 状态 | 说明 |
-|------|------|------|
-| **历史记录** | ✅ | 自动记录定义跳转、引用搜索、符号搜索 |
-| **Tree View 展示** | ✅ | Explorer 中的 `C/C++ Browse History` 视图 |
-| **持久化存储** | ✅ | 历史数据跨会话保存 |
-| **清空历史** | ✅ | 一键清空所有历史记录 |
 
 ## 🚀 快速开始
 
@@ -85,22 +112,28 @@ npm run package
 
 ## 📖 常用命令
 
-| 命令 | 用途 | 快捷键/入口 |
-|------|------|-------------|
-| `C/C++ Navigator: Rebuild Index (incremental)` | 增量重建内置索引 | 命令面板 |
-| `C/C++ Navigator: Build cscope/ctags Database` | 构建外部数据库 | 命令面板 |
-| `C/C++ Navigator: Rebuild All (cscope + index)` | 构建全部数据库 | 命令面板 |
-| `C/C++ Navigator: Show Index Stats` | 显示索引统计 | 命令面板 |
-| `C/C++ Navigator: Search Symbol` | 全局符号搜索并跳转 | 命令面板 |
-| `C/C++ Navigator: Preview Definition` | 旁侧预览定义 | 右键菜单 |
-| `C/C++ Navigator: Search Selected Text` | 全局搜索选中文本 | 右键菜单 |
-| `C/C++ Navigator: Clear Browse History` | 清空浏览历史 | 视图标题栏 |
+| 命令 | 用途 | 入口 |
+|------|------|------|
+| `Rebuild Index (incremental)` | 增量重建内置索引 | 命令面板 |
+| `Build cscope/ctags Database` | 构建外部数据库 | 命令面板 |
+| `Rebuild All (cscope + index)` | 构建全部数据库 | 命令面板 |
+| `Show Index Stats` | 显示索引统计 | 命令面板 / 状态栏点击 |
+| `Search Symbol` | 全局符号搜索并跳转 | 命令面板 |
+| `Preview Definition` | 旁侧预览定义 | 右键菜单 `navigation@1` |
+| `Search Selected Text` | 全局搜索选中文本 | 右键菜单 `navigation@2` |
+| `Show Call Hierarchy` | VS Code 原生调用层级面板 | 右键菜单 `navigation@3` |
+| `Show Call Tree Graph` | ECharts 调用树可视化 | 右键菜单 `navigation@4` |
+| `Clear Browse History` | 清空浏览历史 | 视图标题栏 |
+| `Clear Call Tree` | 清空当前调用树 | 调用树视图标题栏 |
+| `AI Clean Call Tree` | 使用 AI 复核并清理调用树误报 | 调用树视图标题栏 |
+| `Configure DeepSeek API Key` | 保存 DeepSeek API key 到 SecretStorage | 命令面板 |
+| `Configure Xiaomi MiMo API Key` | 保存小米 MiMo API key 到 SecretStorage | 命令面板 |
 
 ## ⚙️ 配置项
 
 在 `settings.json` 中配置：
 
-```json
+```jsonc
 {
   // 后端选择：auto(自动检测) / cscope(强制) / builtin(仅内置)
   "cppNavigator.backend": "auto",
@@ -125,7 +158,16 @@ npm run package
     "**/node_modules/**",
     "**/CMakeFiles/**",
     "**/vendor/**/test/**"
-  ]
+  ],
+
+  // AI 调用树清理：deepseek / xiaomi / custom
+  "cppNavigator.ai.enabled": false,
+  "cppNavigator.ai.provider": "deepseek",
+  "cppNavigator.ai.endpoint": "https://api.deepseek.com",
+  "cppNavigator.ai.model": "deepseek-v4-pro",
+  "cppNavigator.ai.timeoutMs": 45000,
+  "cppNavigator.ai.contextLines": 8,
+  "cppNavigator.ai.batchSize": 30
 }
 ```
 
@@ -139,6 +181,15 @@ npm run package
 | `cppNavigator.activeConfigs` | `[]` | 内置索引处理 `#ifdef` 时认为启用的宏 |
 | `cppNavigator.extraRoots` | `[]` | 除工作区外额外扫描的源码根目录 |
 | `cppNavigator.excludePatterns` | 见上方 | Glob 排除模式，支持 `**` 通配符 |
+| `cppNavigator.ai.enabled` | `false` | 是否启用 AI 调用树清理 |
+| `cppNavigator.ai.provider` | `deepseek` | AI provider：`deepseek`、`xiaomi` 或 `custom` |
+| `cppNavigator.ai.endpoint` | `https://api.deepseek.com` | Chat Completions base URL；provider 为 `xiaomi` 且未手动配置时默认使用 `https://api.xiaomimimo.com/v1` |
+| `cppNavigator.ai.apiKey` | `""` | DeepSeek/custom key 的配置回退；更推荐命令面板存入 SecretStorage |
+| `cppNavigator.ai.xiaomiApiKey` | `""` | 小米 MiMo key 的配置回退；更推荐命令面板存入 SecretStorage |
+| `cppNavigator.ai.model` | `deepseek-v4-pro` | 模型名；provider 为 `xiaomi` 且未手动配置时默认使用 `mimo-v2.5-pro` |
+| `cppNavigator.ai.timeoutMs` | `45000` | 单批 AI 请求超时时间 |
+| `cppNavigator.ai.contextLines` | `8` | 每个候选调用点截取的上下文行数 |
+| `cppNavigator.ai.batchSize` | `30` | 单次发送给 AI 复核的候选节点数量 |
 
 ## 🔧 后端模式对比
 
@@ -149,6 +200,7 @@ npm run package
 - ✅ 增量更新，文件保存时自动刷新
 - ✅ 支持简单 `#ifdef` 过滤
 - ✅ 低资源占用，适合大型代码库
+- ✅ 支持调用树分析（文本级，有缓存）
 
 **局限**：
 - ⚠️ 文本级扫描，非完整 AST 解析
@@ -162,7 +214,7 @@ npm run package
 **优点**：
 - ✅ 语义级查询，准确性高
 - ✅ 支持调用层级（Caller/Callee）
-- ✅ 成熟的工业级工具��
+- ✅ 成熟的工业级工具链
 
 **要求**：
 - 需要手动构建数据库
@@ -177,40 +229,34 @@ ctags -R -f tags .
 
 **适合场景**：对准确性要求高、需要调用层级分析
 
-## 📊 索引统计
-
-执行 `C/C++ Navigator: Show Index Stats` 查看：
-
-```
-Indexed Files: 1,234
-Total Symbols: 45,678
-  - Definitions: 23,456
-  - Declarations: 22,222
-Database: SQLite (symbol-index.db)
-Backend: auto (cscope detected)
-```
-
 ## 📁 项目结构
 
 ```
 cpp-navigator/
 ├── src/
-│   ├── extension.ts           # 入口：生命周期、命令注册
-│   ├── indexBuilder.ts        # 索引构建器
-│   ├── symbolIndex.ts         # 内存索引
-│   ├── db.ts                  # 持久化（SQLite/JSON）
-│   ├── providers.ts           # VS Code Provider 实现
-│   ├── cscopeBackend.ts       # cscope/ctags 后端
-│   ├── callHierarchyProvider.ts # 调用层级
-│   ├── historyManager.ts      # 浏览历史
-│   ├── projectDetector.ts     # 项目配置检测
-│   └── types.ts               # 类型定义
+│   ├── extension.ts               # 入口：生命周期、Provider 注册、事件绑定
+│   ├── types.ts                   # 共享类型（SymbolEntry, CallTreeNode, EChartsTreeNode）
+│   ├── indexBuilder.ts            # 索引构建器：文件扫描、符号提取
+│   ├── symbolIndex.ts             # 内存索引：四个 Map 存储符号
+│   ├── db.ts                      # 持久化（SQLite/JSON 双模式）
+│   ├── providers.ts               # VS Code Provider（Definition, Reference, Hover 等）
+│   ├── cscopeBackend.ts           # cscope/ctags 后端
+│   ├── callHierarchyProvider.ts   # 原生 CallHierarchyProvider（委托给 Service）
+│   ├── historyManager.ts          # 浏览历史：Tree View 和持久化
+│   ├── projectDetector.ts         # 项目配置检测
+│   ├── services/
+│   │   ├── callAnalysisService.ts # 调用分析服务：LRU 缓存、主题检测、Webview 构建
+│   │   └── aiReviewService.ts     # AI 调用树复核：DeepSeek / 小米 MiMo / custom provider
+│   ├── views/
+│   │   └── callTreeProvider.ts    # 侧边栏 TreeDataProvider（懒加载 getChildren）
+│   └── commands/
+│       └── callTreeCommands.ts    # 命令控制器：薄封装，调用 Service → 渲染 View
 ├── images/
 │   └── icon.png
 ├── docs/
-│   ├── ARCHITECTURE.md        # 架构设计
-│   ├── DEVELOPMENT.md         # 开发指南
-│   └── ROADMAP.md             # 路线图
+│   ├── ARCHITECTURE.md
+│   ├── DEVELOPMENT.md
+│   └── ROADMAP.md
 └── package.json
 ```
 
@@ -221,64 +267,38 @@ npm install          # 安装依赖
 npm run compile      # 编译 TypeScript
 npm run watch        # 监听模式
 npm run package      # 打包 VSIX
-npm run test         # 运行测试（待实现）
 ```
 
 ## 📚 文档
 
-- [🏗️ 架构设计](ARCHITECTURE.md) - 模块划分、数据流、扩展点
-- [🔧 开发指南](docs/DEVELOPMENT.md) - 本地开发、调试、测试
-- [🗺️ 路线图](docs/ROADMAP.md) - 功能规划、待办事项
+- [🏗️ 架构设计](ARCHITECTURE.md) - 分层架构、数据流、LRU 缓存设计
+- [🔧 开发指南](docs/DEVELOPMENT.md) - 本地开发、调试、模块说明
+- [🗺️ 路线图](docs/ROADMAP.md) - 功能规划、进度追踪
 
 ## ⚠️ 已知限制
 
-| 限制 | 影响 |  workaround |
-|------|------|-------------|
+| 限制 | 影响 | workaround |
+|------|------|------------|
 | 内置引用搜索是文本扫描 | 可能包含注释、字符串中的同名符号 | 使用 cscope 后端提高准确性 |
 | 复杂模板/宏展开 | 定义可能遗漏或错误 | 结合 cscope/ctags 后端 |
 | 函数指针调用 | 可能无法精确定位 | 手动查找或使用全局搜索 |
 | 非活跃代码分支 | 默认不索引 | 配置 `activeConfigs` 调整 |
-
-## 🆚 与完整语言服务器对比
-
-| 能力 | C/C++ Navigator | clangd / cpptools |
-|------|-----------------|-------------------|
-| 跳转定义 | ✅ | ✅ |
-| 跳转声明 | ✅ | ✅ |
-| 查找引用 | ✅ (文本/cscope) | ✅ (语义级) |
-| 智能补全 | ❌ | ✅ |
-| 错误诊断 | ❌ | ✅ |
-| 重构 | ❌ | ✅ |
-| 资源占用 | 🟢 低 | 🔴 高 |
-| 启动速度 | 🟢 快 | 🟡 慢 |
-| 部署难度 | 🟢 简单 | 🟡 需配置编译数据库 |
+| ECharts 需要网络 | Webview 加载 CDN 资源 | 离线环境可缓存 JS 到本地 |
+| AI 清理会发送代码上下文 | 调用点附近源码会发送到所选 provider | 仅在可信环境启用，并控制 `contextLines` / `batchSize` |
 
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
 ```bash
-# Fork 仓库
-git clone https://github.com/YOUR_USERNAME/cpp-navigator.git
+git clone https://github.com/Kalaser/cpp-navigator.git
 cd cpp-navigator
-
-# 创建功能分支
 git checkout -b feature/your-feature
-
-# 开发并提交
-npm run compile
+npm install && npm run compile
 git commit -m "feat: add your feature"
-
-# 推送 PR
 git push origin feature/your-feature
 ```
 
 ## 📄 许可证
 
 [MIT License](LICENSE)
-
-## 🙏 致谢
-
-- 灵感来源于 [SourceSeek](https://github.com/sourcegraph/sourcegraph)
-- 使用 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) 提供 SQLite 支持
-- 打包工具 [@vscode/vsce](https://github.com/microsoft/vscode-vsce)

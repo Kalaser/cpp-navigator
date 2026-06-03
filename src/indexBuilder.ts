@@ -33,8 +33,13 @@ interface CondFrame { condition: string; active: boolean; seenTrue: boolean; }
 function evalCondition(expr: string, activeConfigs: Set<string>): boolean {
     const clean = expr.trim();
     if (clean.startsWith('!')) return !activeConfigs.has(clean.slice(1).trim());
-    const m = clean.match(/^defined\s*\(\s*(\w+)\s*\)/);
-    if (m) return activeConfigs.has(m[1]);
+    // defined(CONFIG_XXX)
+    const mDefined = clean.match(/^defined\s*\(\s*(\w+)\s*\)/);
+    if (mDefined) return activeConfigs.has(mDefined[1]);
+    // IS_ENABLED(CONFIG_XXX)  — RTOS/Linux 内核常见宏
+    const mIsEnabled = clean.match(/^IS_ENABLED\s*\(\s*(\w+)\s*\)/);
+    if (mIsEnabled) return activeConfigs.has(mIsEnabled[1]);
+    // CONFIG_XXX (直接匹配)
     return activeConfigs.has(clean);
 }
 
