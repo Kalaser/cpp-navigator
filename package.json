@@ -1,5 +1,6 @@
 {
   "name": "cpp-navigator",
+  "id": "local.cpp-navigator",
   "publisher": "local",
   "displayName": "C/C++ Navigator",
   "description": "Fast C/C++ code navigation using cscope/ctags or the built-in indexer",
@@ -98,6 +99,16 @@
         "title": "Open Call Tree Node"
       },
       {
+        "command": "cppNavigator.goToCallTreeSource",
+        "title": "Go to Source",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "cppNavigator.openCallTreeNodeToSide",
+        "title": "Open to Side",
+        "icon": "$(split-horizontal)"
+      },
+      {
         "command": "cppNavigator.aiAnalyzeFunction",
         "title": "AI: Analyze Function",
         "icon": "$(sparkle)"
@@ -153,6 +164,16 @@
         {
           "command": "cppNavigator.previewHistoryItem",
           "when": "view == cppNavigator.historyView && viewItem == cppNavigatorHistoryItem",
+          "group": "inline"
+        },
+        {
+          "command": "cppNavigator.goToCallTreeSource",
+          "when": "view == cppNavigator.callTreeView && viewItem == node",
+          "group": "inline"
+        },
+        {
+          "command": "cppNavigator.openCallTreeNodeToSide",
+          "when": "view == cppNavigator.callTreeView && viewItem == node",
           "group": "inline"
         }
       ],
@@ -308,7 +329,21 @@
           "description": "Maximum candidate nodes sent in one AI review request."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "cppNavigator.goToCallTreeSource",
+        "key": "enter",
+        "when": "view == cppNavigator.callTreeView && viewItem == node && focusedView == cppNavigator.callTreeView",
+        "title": "Go to Source"
+      },
+      {
+        "command": "cppNavigator.openCallTreeNodeToSide",
+        "key": "shift+enter",
+        "when": "view == cppNavigator.callTreeView && viewItem == node && focusedView == cppNavigator.callTreeView",
+        "title": "Open to Side"
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p ./",

@@ -50,9 +50,7 @@ export function registerShowCallTreeGraph(disposables: vscode.Disposable[]): voi
             const uri = defs[0]?.uri ?? editor.document.uri.toString();
             const line = defs[0]?.line ?? editor.selection.active.line;
             const char = defs[0]?.character ?? 0;
-            treeManager.startNewTrace(word, uri, line, char);
-
-            // 2. 构建 + AI 分析
+            // 1. 构建 + AI 分析（先填充缓存，再触发 TreeView 刷新）
             const aiEnabled = await aiReviewService?.isReady() ?? false;
             const title = aiEnabled
                 ? `$(sync~spin) AI analyzing call tree for "${word}"...`
@@ -61,6 +59,8 @@ export function registerShowCallTreeGraph(disposables: vscode.Disposable[]): voi
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Notification, title },
                 async () => {
+                    treeManager!.startNewTrace(word, uri, line, char);
+
                     // AI 先行：分析候选节点，标记 valid/invalid/inferred
                     if (aiEnabled && aiReviewService) {
                         try {
@@ -76,6 +76,9 @@ export function registerShowCallTreeGraph(disposables: vscode.Disposable[]): voi
                     const data = await treeManager!.exportTree();
                     if (!graphWebview) graphWebview = new CallGraphWebview();
                     graphWebview.render(word, data.callers, data.callees);
+
+                    // 缓存已填充，再触发侧边栏刷新
+                    treeManager!.refresh();
                 }
             );
         })

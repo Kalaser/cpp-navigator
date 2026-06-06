@@ -65,6 +65,11 @@ export class CallTreeManager implements vscode.TreeDataProvider<CallTreeNodeItem
         this._onDidChangeTreeData.fire(undefined);
     }
 
+    /** 刷新侧边栏 TreeView（缓存已填充后调用） */
+    refresh(): void {
+        this._onDidChangeTreeData.fire(undefined);
+    }
+
     async runAiReview(aiReview: AiReviewService, activeConfigs: string[]): Promise<{
         reviewed: number;
         valid: number;
@@ -325,7 +330,7 @@ export class CallTreeManager implements vscode.TreeDataProvider<CallTreeNodeItem
             decision ? `AI: ${decision.status}${decision.reason ? ` - ${decision.reason}` : ''}` : undefined,
         ].filter(Boolean).join('\n');
         item.contextValue = decision?.status === 'invalid' ? 'node-ai-invalid' : item.contextValue;
-        // 使用自定义命令打开文件，保持焦点在侧边栏
+        // 单击跳转：选中符号名 + 状态栏反馈
         item.command = {
             command: 'cppNavigator.openCallTreeNode',
             title: 'Open',

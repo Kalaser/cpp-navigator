@@ -370,11 +370,31 @@ export async function activate(context: vscode.ExtensionContext) {
         { scheme: 'file', language: 'cpp' },
     ];
 
-    // 8. 注册 TreeView
+    // 8. 注册 TreeView（callTreeView 用 createTreeView 以获取选中事件）
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('cppNavigator.historyView', historyManager),
-        vscode.window.registerTreeDataProvider('cppNavigator.callTreeView', callTreeManager),
     );
+    const callTreeView = vscode.window.createTreeView('cppNavigator.callTreeView', {
+        treeDataProvider: callTreeManager,
+    });
+    context.subscriptions.push(callTreeView);
+
+    // 点击节点自动跳转到源码（防抖：键盘快速导航时不立即触发）
+    const g = globalThis as any;
+    let jumpTimer: any;
+    callTreeView.onDidChangeSelection(e => {
+        if (jumpTimer) { g.clearTimeout(jumpTimer); jumpTimer = undefined; }
+        const sel = e.selection[0];
+        if (!sel || sel.nodeContext.type !== 'node' || !sel.nodeContext.entry) return;
+        const entry = sel.nodeContext.entry;
+        jumpTimer = g.setTimeout(() => {
+            jumpTimer = undefined;
+            vscode.commands.executeCommand(
+                'cppNavigator.openCallTreeNode',
+                entry.uri, entry.line, entry.character, entry.name.length
+            );
+        }, 200);
+    });
 
     // 9. 注册 Provider（AI 可用时自动注入）
     context.subscriptions.push(
@@ -421,14 +441,63 @@ export async function activate(context: vscode.ExtensionContext) {
                 try {
                     const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
                     const editor = await vscode.window.showTextDocument(doc, {
-                        viewColumn: vscode.ViewColumn.Active,
-                        preserveFocus: true,   // 关键：不抢走侧边栏焦点
-                        preview: true,         // preview 模式：复用 tab
+                        viewColumn: vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
+                        preserveFocus: true,
+                        preview: false,
                     });
-                    const pos = new vscode.Position(line, char);
-                    editor.selection = new vscode.Selection(pos, pos);
+                    // 选中整个符号名，便于识别跳转位置
+                    const start = new vscode.Position(line, char);
+                    const end = new vscode.Position(line, char + (len || 1));
+                    editor.selection = new vscode.Selection(start, end);
                     editor.revealRange(
-                        new vscode.Range(pos, pos),
+                        new vscode.Range(start, end),
+                        vscode.TextEditorRevealType.InCenter
+                    );
+                    // 状态栏短暂反馈
+                    const file = vscode.Uri.parse(uri).fsPath.split(/[/\\]/).pop();
+                    vscode.window.setStatusBarMessage(
+                        `$(file) ${file}:${line + 1}`, 2500
+                    );
+                } catch { /* ignore */ }
+            }
+        ),
+        vscode.commands.registerCommand('cppNavigator.goToCallTreeSource',
+            async (item: any) => {
+                try {
+                    const ctx = item?.nodeContext;
+                    if (!ctx || ctx.type !== 'node' || !ctx.entry) return;
+                    const entry = ctx.entry;
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(entry.uri));
+                    const editor = await vscode.window.showTextDocument(doc, {
+                        viewColumn: vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
+                        preview: false,
+                    });
+                    const start = new vscode.Position(entry.line, entry.character);
+                    const end = new vscode.Position(entry.line, entry.character + entry.name.length);
+                    editor.selection = new vscode.Selection(start, end);
+                    editor.revealRange(
+                        new vscode.Range(start, end),
+                        vscode.TextEditorRevealType.InCenter
+                    );
+                } catch { /* ignore */ }
+            }
+        ),
+        vscode.commands.registerCommand('cppNavigator.openCallTreeNodeToSide',
+            async (item: any) => {
+                try {
+                    const ctx = item?.nodeContext;
+                    if (!ctx || ctx.type !== 'node' || !ctx.entry) return;
+                    const entry = ctx.entry;
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(entry.uri));
+                    const editor = await vscode.window.showTextDocument(doc, {
+                        viewColumn: vscode.ViewColumn.Beside,
+                        preview: false,
+                    });
+                    const start = new vscode.Position(entry.line, entry.character);
+                    const end = new vscode.Position(entry.line, entry.character + entry.name.length);
+                    editor.selection = new vscode.Selection(start, end);
+                    editor.revealRange(
+                        new vscode.Range(start, end),
                         vscode.TextEditorRevealType.InCenter
                     );
                 } catch { /* ignore */ }

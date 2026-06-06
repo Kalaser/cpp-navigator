@@ -73,10 +73,15 @@ export class CallGraphWebview {
     private async openFileAt(uri: string, line: number): Promise<void> {
         try {
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
-            const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+            const editor = await vscode.window.showTextDocument(doc, {
+                viewColumn: vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One,
+                preview: false,
+            });
             const pos = new vscode.Position(line, 0);
             editor.selection = new vscode.Selection(pos, pos);
             editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+            const file = vscode.Uri.parse(uri).fsPath.split(/[/\\]/).pop();
+            vscode.window.setStatusBarMessage(`$(file) ${file}:${line + 1}`, 2500);
         } catch { /* ignore */ }
     }
 
@@ -292,31 +297,39 @@ export class CallGraphWebview {
       doZoom(factor);
     }, { passive: false, capture: true });
 
-    // ── 鼠标拖拽平移 ──────────────────────────────────────────
-    chartEl.addEventListener('pointerdown', function(e) {
+    // ── 拖拽平移（mousedown/mouseup，不拦截 click）──────────
+    var DRAG_THRESHOLD = 5;
+    var dragMoved = false;
+
+    chartEl.addEventListener('mousedown', function(e) {
       if (e.target.tagName === 'BUTTON') return;
       isDragging = true;
+      dragMoved = false;
       dragStartX = e.clientX; dragStartY = e.clientY;
       dragPanX = panX; dragPanY = panY;
       chartEl.classList.add('dragging');
-      chartEl.setPointerCapture(e.pointerId);
-      e.preventDefault();
     });
-    chartEl.addEventListener('pointermove', function(e) {
+    window.addEventListener('mousemove', function(e) {
       if (!isDragging) return;
-      panX = dragPanX + (e.clientX - dragStartX);
-      panY = dragPanY + (e.clientY - dragStartY);
-      chart.setOption(buildOption());
+      var dx = e.clientX - dragStartX, dy = e.clientY - dragStartY;
+      if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) dragMoved = true;
+      if (dragMoved) {
+        panX = dragPanX + dx;
+        panY = dragPanY + dy;
+        chart.setOption(buildOption());
+      }
     });
-    chartEl.addEventListener('pointerup', function(e) {
+    window.addEventListener('mouseup', function(e) {
+      if (!isDragging) return;
       isDragging = false;
       chartEl.classList.remove('dragging');
     });
 
-    // ── 点击跳转 ──────────────────────────────────────────────
+    // ── 点击跳转（ECharts 原生 click，无 pointerCapture 干扰）
     chart.on('click', function(params) {
+      if (dragMoved) return;          // 拖拽结束时不跳转
       if (params.data && params.data._uri) {
-        vscode.postMessage({ command:'openFile', uri:params.data._uri, line:params.data._line });
+        vscode.postMessage({ command:'openFile', uri:params.data._uri, line:params.data._line || 0 });
       }
     });
 
