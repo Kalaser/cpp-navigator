@@ -4,7 +4,7 @@
   "publisher": "local",
   "displayName": "C/C++ Navigator",
   "description": "Fast C/C++ code navigation using cscope/ctags or the built-in indexer",
-  "version": "1.0.0",
+  "version": "1.1.5",
   "icon": "images/icon.png",
   "repository": {
     "type": "git",
