@@ -3,7 +3,6 @@ import { CallTreeManager } from '../callTreeManager';
 import { CallGraphWebview } from '../callGraphWebview';
 import { ManualLinkManager } from '../manualLinkManager';
 import { SymbolIndex } from '../symbolIndex';
-import { AiReviewService } from '../services/aiReviewService';
 
 /**
  * 命令控制器层 — 薄封装，调用 Manager → 渲染 View
@@ -13,14 +12,10 @@ let treeManager: CallTreeManager | undefined;
 let graphWebview: CallGraphWebview | undefined;
 let manualLinks: ManualLinkManager | undefined;
 let index: SymbolIndex | undefined;
-let aiReviewService: AiReviewService | undefined;
-let activeConfigProvider: (() => string[]) | undefined;
 
 export function setTreeManager(mgr: CallTreeManager): void { treeManager = mgr; }
 export function setManualLinkManager(mgr: ManualLinkManager): void { manualLinks = mgr; }
 export function setSymbolIndex(idx: SymbolIndex): void { index = idx; }
-export function setAiReviewService(service: AiReviewService): void { aiReviewService = service; }
-export function setActiveConfigProvider(provider: () => string[]): void { activeConfigProvider = provider; }
 
 // ── 命令 1: Show Call Hierarchy (原生 Peek) ─────────────────────
 export function registerShowCallHierarchy(disposables: vscode.Disposable[]): void {
@@ -50,29 +45,16 @@ export function registerShowCallTreeGraph(disposables: vscode.Disposable[]): voi
             const uri = defs[0]?.uri ?? editor.document.uri.toString();
             const line = defs[0]?.line ?? editor.selection.active.line;
             const char = defs[0]?.character ?? 0;
-            // 1. 构建 + AI 分析（先填充缓存，再触发 TreeView 刷新）
-            const aiEnabled = await aiReviewService?.isReady() ?? false;
-            const title = aiEnabled
-                ? `$(sync~spin) AI analyzing call tree for "${word}"...`
-                : `$(sync~spin) Building call graph for "${word}"...`;
 
+            // 2. 构建调用树 + 渲染 Webview
             await vscode.window.withProgress(
-                { location: vscode.ProgressLocation.Notification, title },
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: `$(sync~spin) Building call graph for "${word}"...`,
+                },
                 async () => {
                     treeManager!.startNewTrace(word, uri, line, char);
 
-                    // AI 先行：分析候选节点，标记 valid/invalid/inferred
-                    if (aiEnabled && aiReviewService) {
-                        try {
-                            await treeManager!.runAiReview(
-                                aiReviewService, activeConfigProvider?.() ?? []
-                            );
-                        } catch {
-                            // AI 失败不阻断建树，降级为原始结果
-                        }
-                    }
-
-                    // 导出并渲染（AI 决策已内置在树节点中）
                     const data = await treeManager!.exportTree();
                     if (!graphWebview) graphWebview = new CallGraphWebview();
                     graphWebview.render(word, data.callers, data.callees);
@@ -151,45 +133,6 @@ export function registerClearCallTree(disposables: vscode.Disposable[]): void {
 }
 
 // ── Helper ──────────────────────────────────────────────────────
-export function registerAiCleanCallTree(disposables: vscode.Disposable[]): void {
-    disposables.push(
-        vscode.commands.registerCommand('cppNavigator.aiCleanCallTree', async () => {
-            if (!treeManager || !aiReviewService) return;
-            if (!aiReviewService.isEnabled()) {
-                vscode.window.showWarningMessage(
-                    'AI call-tree review is disabled. Enable cppNavigator.ai.enabled and configure a DeepSeek or Xiaomi API key first.'
-                );
-                return;
-            }
-
-            if (!treeManager.hasActiveTree()) {
-                vscode.window.showWarningMessage(
-                    'No call tree is active. Right-click a C/C++ symbol and select "Show Call Tree Graph" first, then run AI Clean.'
-                );
-                return;
-            }
-
-            try {
-                const summary = await vscode.window.withProgress(
-                    {
-                        location: vscode.ProgressLocation.Notification,
-                        title: 'AI cleaning call tree...',
-                        cancellable: false,
-                    },
-                    () => treeManager!.runAiReview(aiReviewService!, activeConfigProvider?.() ?? [])
-                );
-                vscode.window.showInformationMessage(
-                    `AI reviewed ${summary.reviewed} nodes: ${summary.valid} valid, ${summary.invalid} likely false positives` +
-                    (summary.inferred > 0 ? `, ${summary.inferred} callback hints` : '')
-                );
-            } catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                vscode.window.showErrorMessage(`AI call-tree review failed: ${message}`);
-            }
-        })
-    );
-}
-
 function getWord(doc: vscode.TextDocument, pos: vscode.Position): string | undefined {
     const range = doc.getWordRangeAtPosition(pos, /[\w:]+/);
     return range ? doc.getText(range) : undefined;

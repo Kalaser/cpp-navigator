@@ -18,7 +18,6 @@ C/C++ Navigator 是一个面向大型 C/C++ 代码库的 VS Code 导航插件。
 | 💾 **持久化存储** | 优先 SQLite 数据库，失败时自动降级 JSON 缓存 |
 | 📜 **浏览历史** | 自动记录跳转历史，支持 Tree View 回溯 |
 | 📊 **调用树可视化** | 侧边栏懒加载树 + ECharts Webview 全局调用关系图 |
-| ✨ **AI 调用树清理** | 支持 DeepSeek 与小米 MiMo API，辅助过滤调用树误报并提示回调线索 |
 | 🎨 **原生主题适配** | 全自动适配 Dark/Light/High Contrast 主题，零硬编码颜色 |
 | ⚡ **LRU 缓存** | 调用分析结果缓存，展开/收起节点无需重复计算 |
 | 🛠️ **灵活配置** | 支持额外源码根目录、排除模式、活跃宏定义 |
@@ -38,7 +37,6 @@ C/C++ Navigator 是一个面向大型 C/C++ 代码库的 VS Code 导航插件。
 | **定义预览** | 右键菜单 | ✅ | 旁侧 Webview 预览定义 |
 | **调用层级（原生）** | `Shift+Alt+H` / 右键 | ✅ | VS Code 原生 Peek Call Hierarchy 面板 |
 | **调用树可视化** | 右键 → Show Call Tree Graph | ✅ | 侧边栏懒加载树 + ECharts 关系图 |
-| **AI 清理调用树** | 调用树视图标题栏魔杖按钮 | ✅ | 使用 DeepSeek 或小米 MiMo 复核候选调用关系 |
 
 ### 调用树功能
 
@@ -49,26 +47,6 @@ C/C++ Navigator 是一个面向大型 C/C++ 代码库的 VS Code 导航插件。
 | **交互操作** | 点击节点跳转源码、滚动缩放、拖拽平移、Expand/Collapse All 按钮 |
 | **主题自动适配** | 检测 VS Code 主题类型（Light/Dark/HC），Webview 颜色实时跟随 |
 | **LRU 缓存** | 最多 500 条缓存，自动淘汰最旧条目，文件变更时自动清除 |
-| **AI 清理** | 将候选调用点及上下文发送到已配置的大模型，标记疑似误报并补充回调提示 |
-
-### AI 辅助调用树清理
-
-AI 清理是可选能力，默认关闭。开启后，插件会把候选调用树节点、目标函数签名和少量源码上下文发送到配置的 OpenAI-compatible Chat Completions 接口，让模型复核调用关系是否真实存在。
-
-当前内置 provider：
-
-| Provider | 默认 endpoint | 默认 model | API key 来源 |
-|------|------|------|------|
-| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-pro` | SecretStorage / `cppNavigator.ai.apiKey` / `DEEPSEEK_API_KEY` |
-| `xiaomi` | `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro` | SecretStorage / `cppNavigator.ai.xiaomiApiKey` / `MIMO_API_KEY` / `XIAOMI_API_KEY` |
-| `custom` | 使用 `endpoint` 配置 | 使用 `model` 配置 | `cppNavigator.ai.apiKey` / `CPP_NAVIGATOR_AI_API_KEY` |
-
-推荐通过命令面板保存密钥：
-
-1. `C/C++ Navigator: Configure DeepSeek API Key`
-2. `C/C++ Navigator: Configure Xiaomi MiMo API Key`
-
-这两个命令会把 key 存入 VS Code SecretStorage，并自动启用 `cppNavigator.ai.enabled`。配置小米 key 时还会自动把 `cppNavigator.ai.provider` 切到 `xiaomi`。
 
 ### 数据库构建
 
@@ -125,9 +103,8 @@ npm run package
 | `Show Call Tree Graph` | ECharts 调用树可视化 | 右键菜单 `navigation@4` |
 | `Clear Browse History` | 清空浏览历史 | 视图标题栏 |
 | `Clear Call Tree` | 清空当前调用树 | 调用树视图标题栏 |
-| `AI Clean Call Tree` | 使用 AI 复核并清理调用树误报 | 调用树视图标题栏 |
-| `Configure DeepSeek API Key` | 保存 DeepSeek API key 到 SecretStorage | 命令面板 |
-| `Configure Xiaomi MiMo API Key` | 保存小米 MiMo API key 到 SecretStorage | 命令面板 |
+| `Mark as Caller` | 标记当前符号为手动调用链的起点 | 右键菜单 `cppNav@1` |
+| `Link to Definition` | 将已标记的 Caller 与当前符号建立手动映射 | 右键菜单 `cppNav@2` |
 
 ## ⚙️ 配置项
 
@@ -158,16 +135,7 @@ npm run package
     "**/node_modules/**",
     "**/CMakeFiles/**",
     "**/vendor/**/test/**"
-  ],
-
-  // AI 调用树清理：deepseek / xiaomi / custom
-  "cppNavigator.ai.enabled": false,
-  "cppNavigator.ai.provider": "deepseek",
-  "cppNavigator.ai.endpoint": "https://api.deepseek.com",
-  "cppNavigator.ai.model": "deepseek-v4-pro",
-  "cppNavigator.ai.timeoutMs": 45000,
-  "cppNavigator.ai.contextLines": 8,
-  "cppNavigator.ai.batchSize": 30
+  ]
 }
 ```
 
@@ -181,15 +149,6 @@ npm run package
 | `cppNavigator.activeConfigs` | `[]` | 内置索引处理 `#ifdef` 时认为启用的宏 |
 | `cppNavigator.extraRoots` | `[]` | 除工作区外额外扫描的源码根目录 |
 | `cppNavigator.excludePatterns` | 见上方 | Glob 排除模式，支持 `**` 通配符 |
-| `cppNavigator.ai.enabled` | `false` | 是否启用 AI 调用树清理 |
-| `cppNavigator.ai.provider` | `deepseek` | AI provider：`deepseek`、`xiaomi` 或 `custom` |
-| `cppNavigator.ai.endpoint` | `https://api.deepseek.com` | Chat Completions base URL；provider 为 `xiaomi` 且未手动配置时默认使用 `https://api.xiaomimimo.com/v1` |
-| `cppNavigator.ai.apiKey` | `""` | DeepSeek/custom key 的配置回退；更推荐命令面板存入 SecretStorage |
-| `cppNavigator.ai.xiaomiApiKey` | `""` | 小米 MiMo key 的配置回退；更推荐命令面板存入 SecretStorage |
-| `cppNavigator.ai.model` | `deepseek-v4-pro` | 模型名；provider 为 `xiaomi` 且未手动配置时默认使用 `mimo-v2.5-pro` |
-| `cppNavigator.ai.timeoutMs` | `45000` | 单批 AI 请求超时时间 |
-| `cppNavigator.ai.contextLines` | `8` | 每个候选调用点截取的上下文行数 |
-| `cppNavigator.ai.batchSize` | `30` | 单次发送给 AI 复核的候选节点数量 |
 
 ## 🔧 后端模式对比
 
@@ -244,11 +203,9 @@ cpp-navigator/
 │   ├── callHierarchyProvider.ts   # 原生 CallHierarchyProvider（委托给 Service）
 │   ├── historyManager.ts          # 浏览历史：Tree View 和持久化
 │   ├── projectDetector.ts         # 项目配置检测
-│   ├── services/
-│   │   ├── callAnalysisService.ts # 调用分析服务：LRU 缓存、主题检测、Webview 构建
-│   │   └── aiReviewService.ts     # AI 调用树复核：DeepSeek / 小米 MiMo / custom provider
-│   ├── views/
-│   │   └── callTreeProvider.ts    # 侧边栏 TreeDataProvider（懒加载 getChildren）
+│   ├── utils/
+│   │   ├── lruCache.ts            # LRU 缓存工具
+│   │   └── fileSearcher.ts        # 全库源码扫描（带文件内容缓存）
 │   └── commands/
 │       └── callTreeCommands.ts    # 命令控制器：薄封装，调用 Service → 渲染 View
 ├── images/
@@ -284,7 +241,6 @@ npm run package      # 打包 VSIX
 | 函数指针调用 | 可能无法精确定位 | 手动查找或使用全局搜索 |
 | 非活跃代码分支 | 默认不索引 | 配置 `activeConfigs` 调整 |
 | ECharts 需要网络 | Webview 加载 CDN 资源 | 离线环境可缓存 JS 到本地 |
-| AI 清理会发送代码上下文 | 调用点附近源码会发送到所选 provider | 仅在可信环境启用，并控制 `contextLines` / `batchSize` |
 
 ## 🤝 贡献
 

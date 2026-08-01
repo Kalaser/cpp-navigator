@@ -23,6 +23,21 @@ type SqliteDatabase = {
     close(): void;
 };
 
+// better-sqlite3 是可选依赖：原生模块构建失败时会抛异常。
+// 这里缓存模块引用，避免每次 activate 都重新触发一次加载失败。
+let sqliteModule: (new (filename: string) => SqliteDatabase) | null | undefined;
+
+function loadSqliteModule(): (new (filename: string) => SqliteDatabase) | null {
+    if (sqliteModule !== undefined) return sqliteModule;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        sqliteModule = require('better-sqlite3') as (new (filename: string) => SqliteDatabase);
+    } catch {
+        sqliteModule = null;
+    }
+    return sqliteModule;
+}
+
 export class IndexDatabase {
     public isReady = false;
 
@@ -39,15 +54,16 @@ export class IndexDatabase {
     async open(): Promise<void> {
         await fs.promises.mkdir(this.storagePath, { recursive: true });
 
-        try {
-            // better-sqlite3 is optional at runtime because native builds can fail
-            // on machines without a matching prebuilt binary or C++ toolchain.
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const Database = require('better-sqlite3') as new (filename: string) => SqliteDatabase;
-            this.sqlite = new Database(path.join(this.storagePath, 'symbol-index.db'));
-            this.initSqlite();
-        } catch {
-            this.sqlite = null;
+        const Database = loadSqliteModule();
+        if (Database) {
+            try {
+                this.sqlite = new Database(path.join(this.storagePath, 'symbol-index.db'));
+                this.initSqlite();
+            } catch {
+                this.sqlite = null;
+            }
+        }
+        if (!this.sqlite) {
             await this.loadJson();
         }
 
@@ -203,6 +219,8 @@ export class IndexDatabase {
             CREATE INDEX IF NOT EXISTS idx_name ON symbols(name);
             CREATE INDEX IF NOT EXISTS idx_qname ON symbols(qualified_name);
             CREATE INDEX IF NOT EXISTS idx_uri ON symbols(uri);
+            CREATE INDEX IF NOT EXISTS idx_uri_line ON symbols(uri, line);
+            CREATE INDEX IF NOT EXISTS idx_kind_uri ON symbols(kind, uri);
         `);
     }
 

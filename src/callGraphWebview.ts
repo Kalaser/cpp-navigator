@@ -4,6 +4,8 @@ import { CallTreeNode, EChartsTreeNode } from './types';
 /**
  * Task 4.1: 蝴蝶结形态（Butterfly）全景调用拓扑图
  * Callers orient:RL (左) + Callees orient:LR (右)
+ *
+ * 说明：ECharts 从 jsdelivr CDN 加载，离线环境会回退为"无图表提示"。
  */
 export class CallGraphWebview {
     private panel: vscode.WebviewPanel | undefined;
@@ -11,7 +13,31 @@ export class CallGraphWebview {
     render(symbol: string, callersTree: CallTreeNode[], calleesTree: CallTreeNode[]): void {
         const callersData = callersTree.map(n => this.toEChartsNode(n));
         const calleesData = calleesTree.map(n => this.toEChartsNode(n));
-        this.createOrReveal(symbol, callersData, calleesData);
+
+        if (this.panel) {
+            // 复用已有 panel,直接更新 HTML 与标题
+            this.panel.title = `Call Graph: ${symbol}`;
+            this.panel.webview.html = this.buildHtml(this.panel.webview, symbol, callersData, calleesData);
+            this.panel.reveal(vscode.ViewColumn.Beside, true);
+            return;
+        }
+
+        this.panel = vscode.window.createWebviewPanel(
+            'cppNavigator.callGraph',
+            `Call Graph: ${symbol}`,
+            { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+            { enableScripts: true, retainContextWhenHidden: true }
+        );
+
+        this.panel.webview.html = this.buildHtml(this.panel.webview, symbol, callersData, calleesData);
+
+        this.panel.webview.onDidReceiveMessage(msg => {
+            if (msg.command === 'openFile') {
+                this.openFileAt(msg.uri, msg.line);
+            }
+        });
+
+        this.panel.onDidDispose(() => { this.panel = undefined; });
     }
 
     dispose(): void {
@@ -42,32 +68,6 @@ export class CallGraphWebview {
             _uri: node.uri,
             _line: node.line,
         };
-    }
-
-    private createOrReveal(symbol: string, callersData: EChartsTreeNode[], calleesData: EChartsTreeNode[]): void {
-        if (this.panel) {
-            this.panel.title = `Call Graph: ${symbol}`;
-            this.panel.webview.html = this.buildHtml(this.panel.webview, symbol, callersData, calleesData);
-            this.panel.reveal(vscode.ViewColumn.Beside);
-            return;
-        }
-
-        this.panel = vscode.window.createWebviewPanel(
-            'cppNavigator.callGraph',
-            `Call Graph: ${symbol}`,
-            { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-            { enableScripts: true, retainContextWhenHidden: true }
-        );
-
-        this.panel.webview.html = this.buildHtml(this.panel.webview, symbol, callersData, calleesData);
-
-        this.panel.webview.onDidReceiveMessage(msg => {
-            if (msg.command === 'openFile') {
-                this.openFileAt(msg.uri, msg.line);
-            }
-        });
-
-        this.panel.onDidDispose(() => { this.panel = undefined; });
     }
 
     private async openFileAt(uri: string, line: number): Promise<void> {
@@ -172,7 +172,8 @@ export class CallGraphWebview {
     var EDGE_MARGIN_Y = 72;
 
     var vscode = acquireVsCodeApi();
-    var chart = echarts.init(document.getElementById('chart'), null, { renderer:'canvas' });
+    var chartEl = document.getElementById('chart');
+    var chart = echarts.init(chartEl, null, { renderer:'canvas' });
     var callersData = ${JSON.stringify(callersData)};
     var calleesData = ${JSON.stringify(calleesData)};
 
@@ -289,7 +290,6 @@ export class CallGraphWebview {
     }
 
     // ── 鼠标滚轮缩放 ──────────────────────────────────────────
-    var chartEl = document.getElementById('chart');
     chartEl.addEventListener('wheel', function(e) {
       e.preventDefault();
       e.stopPropagation();

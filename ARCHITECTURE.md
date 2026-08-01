@@ -20,8 +20,8 @@ src/extension.ts
         +-- callTreeManager.ts
         +-- manualLinkManager.ts
         +-- commands/callTreeCommands.ts
-        +-- services/aiReviewService.ts
         +-- historyManager.ts
+        +-- utils/fileSearcher.ts
 ```
 
 ## 模块职责
@@ -31,16 +31,16 @@ src/extension.ts
 | `extension.ts` | 插件生命周期、配置读取、命令注册、Provider 注册、状态栏、文件事件监听 |
 | `projectDetector.ts` | 从 `compile_commands.json`、`CMakeCache.txt`、`.config` 提取宏和 include 信息 |
 | `indexBuilder.ts` | 扫描 C/C++ 文件，移除注释，处理简单条件编译，提取符号 |
-| `symbolIndex.ts` | 内存索引，按简单名和限定名存储定义/声明 |
+| `symbolIndex.ts` | 内存索引，按简单名和限定名存储定义/声明，含 uri 倒排 |
 | `db.ts` | 持久化索引，优先 SQLite，失败时降级 JSON |
 | `providers.ts` | Definition、Declaration、Reference、Workspace Symbol、Document Symbol、Hover |
 | `cscopeBackend.ts` | 构建/查询 `cscope.out`、构建/查询 `tags` |
 | `callHierarchyProvider.ts` | 基于 cscope 查询调用层级 |
-| `callTreeManager.ts` | 管理侧边栏调用树状态、懒加载节点、AI 清理结果合并 |
+| `callTreeManager.ts` | 管理侧边栏调用树状态、懒加载节点、缓存管理 |
 | `manualLinkManager.ts` | 保存手动标记的 caller/callee 关系，补足函数指针等静态分析盲区 |
-| `commands/callTreeCommands.ts` | 调用树相关命令薄封装，连接编辑器、Tree View、Webview 和 AI 服务 |
-| `services/callAnalysisService.ts` | 调用分析辅助服务，处理缓存、主题和 Webview 数据 |
-| `services/aiReviewService.ts` | AI 调用树复核服务，支持 DeepSeek、小米 MiMo 和 custom OpenAI-compatible provider |
+| `commands/callTreeCommands.ts` | 调用树相关命令薄封装，连接编辑器、Tree View 和 Webview |
+| `utils/lruCache.ts` | LRU 缓存工具 |
+| `utils/fileSearcher.ts` | 全库源码扫描（文件内容缓存 + 失效），供调用树与调用层级分析共用 |
 | `historyManager.ts` | 浏览历史 Tree View 和持久化 |
 | `types.ts` | 共享数据结构 |
 
@@ -159,7 +159,7 @@ flowchart TD
 | CallHierarchyProvider | `CallHierarchyProvider` |
 | TreeDataProvider | `HistoryManager` / `CallTreeManager` |
 
-## 调用树与 AI 复核流程
+## 调用树与可视化
 
 调用树能力分为三层：
 
@@ -167,42 +167,14 @@ flowchart TD
 2. `CallTreeManager` 维护侧边栏 `C/C++ Call Tree` 的根节点、展开状态和懒加载结果。
 3. `CallGraphWebview` 将当前调用树导出为 ECharts 关系图。
 
-AI 清理是调用树上的可选后处理步骤：
-
-```mermaid
-sequenceDiagram
-    participant User as User
-    participant Cmd as callTreeCommands.ts
-    participant Tree as CallTreeManager
-    participant AI as AiReviewService
-    participant LLM as Provider API
-
-    User->>Cmd: AI Clean Call Tree
-    Cmd->>Tree: runAiReview()
-    Tree->>AI: reviewCandidates(target, direction, candidates)
-    AI->>AI: collect target signatures and snippets
-    AI->>LLM: POST /chat/completions
-    LLM-->>AI: JSON decisions
-    AI-->>Tree: valid / invalid / inferred nodes
-    Tree-->>Cmd: review summary
-```
-
-`AiReviewService` 使用 OpenAI-compatible Chat Completions 请求格式。内置 provider 默认值如下：
-
-| Provider | Endpoint | Model | SecretStorage key |
-| --- | --- | --- | --- |
-| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-pro` | `cppNavigator.deepSeekApiKey` |
-| `xiaomi` | `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `cppNavigator.xiaomiApiKey` |
-| `custom` | 由 `cppNavigator.ai.endpoint` 指定 | 由 `cppNavigator.ai.model` 指定 | `cppNavigator.deepSeekApiKey` |
-
-密钥优先从 VS Code SecretStorage 读取；没有存储密钥时，才回退到 settings 或环境变量。AI 请求会包含候选调用点附近的源码上下文，因此该能力默认关闭。
+调用树与调用层级的 builtin 文本分析共用 `FileSearcher`（文件内容 LRU 缓存，保存/删除文件时失效），避免每次展开节点都全量读盘。`CallTreeManager` 另有一层 LRU 缓存结果，展开/收起节点不重复计算。cscope 后端通过子进程查询，导出时限制节点数避免子进程风暴。
 
 ## 文件事件
 
 | 事件 | 行为 |
 | --- | --- |
-| 保存 C/C++ 文件 | 重新扫描该文件，替换 DB 和内存索引中的旧符号 |
-| 删除文件 | 从 DB 和内存索引中删除该文件符号 |
+| 保存 C/C++ 文件 | 重新扫描该文件，替换 DB 和内存索引中的旧符号，失效调用树/层级缓存 |
+| 删除文件 | 从 DB 和内存索引中删除该文件符号，失效调用树/层级缓存 |
 | 配置变化 | 触发后台增量索引 |
 
 ## 命令流
@@ -218,9 +190,7 @@ sequenceDiagram
 | `cppNavigator.showCallHierarchy` | VS Code `editor.action.showCallHierarchy` |
 | `cppNavigator.showCallTreeGraph` | `CallTreeManager.exportTree()` + `CallGraphWebview.render()` |
 | `cppNavigator.clearCallTree` | `CallTreeManager.clear()` |
-| `cppNavigator.aiCleanCallTree` | `CallTreeManager.runAiReview()` + `AiReviewService.reviewCandidates()` |
-| `cppNavigator.configureDeepSeekApiKey` | `AiReviewService.storeApiKey(..., 'deepseek')` + SecretStorage |
-| `cppNavigator.configureXiaomiApiKey` | `AiReviewService.storeApiKey(..., 'xiaomi')` + SecretStorage |
+| `cppNavigator.markCaller` | `ManualLinkManager.addLink()`（配合 `linkToDefinition`） |
 
 ## 当前边界
 

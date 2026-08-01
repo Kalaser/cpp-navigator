@@ -22,41 +22,6 @@ export type CallDirection = 'callers' | 'callees';
 
 export type CallTreeNodeType = 'root' | 'category' | 'node' | 'manual-link';
 
-export type AiCallNodeStatus = 'raw' | 'valid' | 'invalid' | 'inferred';
-
-export interface AiReviewDecision {
-    id: string;
-    status: AiCallNodeStatus;
-    reason?: string;
-}
-
-export interface AiReviewCandidate {
-    id: string;
-    symbol: string;
-    qualifiedName: string;
-    uri: string;
-    line: number;
-    character: number;
-    snippet: string;
-    ifdefStack: string[];
-}
-
-export interface AiReviewRequest {
-    targetSymbol: string;
-    direction: CallDirection;
-    activeConfigs: string[];
-    candidates: AiReviewCandidate[];
-    targetSignatures: string[];
-}
-
-export interface AiReviewResult {
-    decisions: AiReviewDecision[];
-    inferredSymbols: Array<{
-        name: string;
-        reason?: string;
-    }>;
-}
-
 /**
  * CallTreeNode — 统一的调用树节点
  * 用于 TreeDataProvider 和 ECharts 可视化
@@ -71,8 +36,6 @@ export interface CallTreeNode {
     nodeType: CallTreeNodeType;
     children: CallTreeNode[];
     isManual?: boolean;
-    aiStatus?: AiCallNodeStatus;
-    aiReason?: string;
 }
 
 /**

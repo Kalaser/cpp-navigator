@@ -11,8 +11,8 @@
 - ✅ 多后端支持（auto/cscope/builtin）
 - ✅ 浏览历史 Tree View
 - ✅ cscope/ctags 数据库构建和查询
-- ✅ 调用树侧边栏、ECharts 图谱、手动链接和 AI 清理基础能力
-- ✅ AI 调用树复核支持 DeepSeek 与小米 MiMo API key
+- ✅ 调用树侧边栏、ECharts 图谱、手动链接基础能力
+- ✅ 调用树文本分析走 FileSearcher 文件内容缓存
 
 ---
 
@@ -313,18 +313,15 @@ interface ManualLink {
 
 ---
 
-## 阶段 9：AI 辅助（探索性）🟡
+## 阶段 9：调用树性能与缓存优化
 
-**状态：基础版完成 | 优先级：低**
+**状态：进行中 | 优先级：高**
 
-- [x] 使用 LLM 复核调用树候选节点
-- [x] 支持 DeepSeek API key
-- [x] 支持小米 MiMo API key
-- [x] 支持 custom OpenAI-compatible endpoint
-- [ ] 使用 LLM 生成符号索引提示
-- [ ] 智能推荐相关符号
-- [ ] 代码理解摘要生成
-- [ ] 调用链自动注释/解释
+- [x] 移除 AI 复核功能（v1.1 起不再依赖外部 API）
+- [x] FileSearcher 文件内容缓存（caller/callee 分析不再全量读盘）
+- [x] SymbolIndex uri 倒排（getForFile / removeFile 降为 O(1)）
+- [ ] 调用树 Webview 离线可用（ECharts 本地化或纯 SVG 渲染）
+- [ ] 增量文件级缓存（保存文件只重扫单个文件）
 
 ---
 
@@ -345,7 +342,7 @@ interface ManualLink {
 | Call tree sidebar and graph | ✅ 部分完成 | 3 |
 | Call hierarchy export | 🔲 待实现 | 3 |
 | Manual function pointer map | ✅ 部分完成 | 5 |
-| AI call-tree cleanup | ✅ 部分完成 | 9 |
+| 调用树文件缓存（FileSearcher） | ✅ 完成 | 9 |
 | Non-active code gray display | 🔲 待实现 | 6 |
 | Status bar quick settings | 🔲 待实现 | 7 |
 | Internal executables | 🔲 待实现 | 7 |
@@ -383,5 +380,6 @@ interface ManualLink {
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
-| 2026-06-03 | v1.0.1 | 补充调用树、手动链接、AI 清理与小米 MiMo API key 支持状态 |
+| 2026-08-01 | v1.1.0 | 移除 AI 复核；调用树/层级分析文件缓存；索引倒排优化；手动链接右键入口 |
+| 2026-06-03 | v1.0.1 | 补充调用树、手动链接支持状态 |
 | 2026-06-01 | v1.0.1 | 初始路线图，基于 SourceSeek 能力拆分 |

@@ -70,11 +70,9 @@ cpp-navigator/
 │   ├── projectDetector.ts     # 项目配置检测：宏定义、include 路径
 │   ├── commands/
 │   │   └── callTreeCommands.ts # 调用树命令注册和 UI 编排
-│   ├── services/
-│   │   ├── aiReviewService.ts # AI 调用树复核 provider 适配
-│   │   └── callAnalysisService.ts # 调用分析和 Webview 辅助
-│   ├── views/
-│   │   └── callTreeProvider.ts # Tree View 节点类型
+│   ├── utils/
+│   │   ├── lruCache.ts         # LRU 缓存工具
+│   │   └── fileSearcher.ts     # 全库源码扫描（文件内容缓存 + 失效）
 │   └── types.ts               # 共享类型定义
 ├── docs/
 │   ├── DEVELOPMENT.md         # 本文档
@@ -202,25 +200,14 @@ interface HistoryItem {
 - 管理 `C/C++ Call Tree` 侧边栏状态
 - 懒加载 caller/callee 节点
 - 合并 cscope、内置索引和手动链接结果
-- 执行 AI 复核后标记误报节点和回调提示
+- 内置分析复用 `FileSearcher` 的文件内容缓存
 
-### aiReviewService.ts
+### fileSearcher.ts
 
 **职责**：
-- 读取 `cppNavigator.ai.*` 配置
-- 从 VS Code SecretStorage、settings 或环境变量解析 API key
-- 以 OpenAI-compatible Chat Completions 格式请求模型
-- 将模型 JSON 输出标准化为 `AiReviewResult`
-
-**内置 provider**：
-
-| Provider | 默认 endpoint | 默认 model | 环境变量回退 |
-|----------|---------------|------------|--------------|
-| `deepseek` | `https://api.deepseek.com` | `deepseek-v4-pro` | `DEEPSEEK_API_KEY` |
-| `xiaomi` | `https://api.xiaomimimo.com/v1` | `mimo-v2.5-pro` | `MIMO_API_KEY` / `XIAOMI_API_KEY` |
-| `custom` | 读取 `cppNavigator.ai.endpoint` | 读取 `cppNavigator.ai.model` | `CPP_NAVIGATOR_AI_API_KEY` |
-
-新增 provider 时，优先扩展 `PROVIDER_DEFAULTS`、API key 解析和 README/配置说明。密钥不要写入普通日志，不要在错误消息中回显。
+- 全库源码扫描的统一入口（调用树与调用层级共用）
+- 按文件缓存文本 + 行索引，保存/删除文件时失效
+- 提供 call-site 正则搜索和函数体内调用收集
 
 ## 编码约定
 
@@ -291,30 +278,6 @@ const value = config.get('newSetting');
 
 3. 更新 `README.md` 和本文档
 
-### AI 配置和密钥
-
-AI 配置位于 `cppNavigator.ai` 命名空间：
-
-```jsonc
-{
-  "cppNavigator.ai.enabled": false,
-  "cppNavigator.ai.provider": "deepseek",
-  "cppNavigator.ai.endpoint": "https://api.deepseek.com",
-  "cppNavigator.ai.model": "deepseek-v4-pro",
-  "cppNavigator.ai.timeoutMs": 45000,
-  "cppNavigator.ai.contextLines": 8,
-  "cppNavigator.ai.batchSize": 30
-}
-```
-
-密钥存储优先级：
-
-1. VS Code SecretStorage，来自 `Configure DeepSeek API Key` 或 `Configure Xiaomi MiMo API Key` 命令。
-2. settings 回退：`cppNavigator.ai.apiKey` 或 `cppNavigator.ai.xiaomiApiKey`。
-3. 环境变量回退：`DEEPSEEK_API_KEY`、`MIMO_API_KEY`、`XIAOMI_API_KEY`、`CPP_NAVIGATOR_AI_API_KEY`。
-
-`endpoint` 可以配置为 base URL，也可以直接配置到 `/chat/completions`。AI 功能会发送少量源码上下文，发布说明和 README 需要明确这一点。
-
 ### 配置变化监听
 
 ```ts
@@ -383,8 +346,6 @@ code --install-extension cpp-navigator-*.vsix
 - [ ] 验证右键 `Preview Definition`
 - [ ] 验证 `C/C++ Call Tree` 侧边栏展开、跳转和清空
 - [ ] 验证 `Show Call Tree Graph` 能打开关系图
-- [ ] 验证 `AI Clean Call Tree` 在未启用时有清晰提示
-- [ ] 验证 `Configure DeepSeek API Key` / `Configure Xiaomi MiMo API Key` 命令能保存或清空密钥
 - [ ] 如果安装了 cscope/ctags，验证 `Build cscope/ctags Database`
 - [ ] 验证 Hover 提示
 - [ ] 验证工作区符号搜索
@@ -435,15 +396,6 @@ choco install cscope              # Windows
 - 复杂宏展开：使用 cscope 后端
 - 模板特化：内置索引不支持，使用 cscope
 - 非活跃代码分支：配置 `activeConfigs`
-
-### AI 调用树清理不可用
-
-检查顺序：
-- `cppNavigator.ai.enabled` 是否为 `true`
-- `cppNavigator.ai.provider` 是否匹配已配置的 key
-- 是否通过命令面板保存过 key，或设置了对应环境变量
-- 公司代理或防火墙是否允许访问所选 provider endpoint
-- 自定义 endpoint 是否为 OpenAI-compatible Chat Completions 接口
 
 ## 贡献指南
 
